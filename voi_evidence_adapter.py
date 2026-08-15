@@ -200,10 +200,7 @@ def build_inventory_evidence_bundle(
             }
         )
 
-    manifest = {
-        "schemaVersion": "1.0.0",
-        "contract": "VOI-INVENTORY-EVIDENCE-001",
-        "sourceMode": "READ_ONLY_EXPORT",
+    payload = {
         "observedAt": observed_at.isoformat().replace("+00:00", "Z"),
         "demandWindowDays": demand_window_days,
         "sources": [
@@ -219,6 +216,17 @@ def build_inventory_evidence_bundle(
         "warnings": warnings,
         "snapshots": snapshots,
     }
-    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    manifest["bundleId"] = f"sha256:{hashlib.sha256(canonical).hexdigest()}"
-    return manifest
+    canonical_payload = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    digest = f"sha256:{hashlib.sha256(canonical_payload.encode('utf-8')).hexdigest()}"
+    return {
+        "schemaVersion": "1.0.0",
+        "contract": "VOI-INVENTORY-EVIDENCE-001",
+        "sourceMode": "READ_ONLY_EXPORT",
+        "payload": payload,
+        "integrity": {
+            "algorithm": "SHA-256",
+            "digest": digest,
+            "canonicalPayload": canonical_payload,
+        },
+        "bundleId": digest,
+    }
