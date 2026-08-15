@@ -135,23 +135,23 @@ VOI-BLUE-L,50,2026-08-14
     def test_rejects_non_finite_values(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            _, sales, products = self._minimal_sources(root)
             inventory = self._write(
                 root,
                 "inventory.csv",
                 "sku,available_qty,observed_at\nVOI-RED-M,nan,2026-08-15T06:20:00Z\n",
             )
-            _, sales, products = self._minimal_sources(root)
             with self.assertRaisesRegex(EvidenceValidationError, "must be finite"):
                 build_inventory_evidence_bundle(inventory, sales, products)
 
     def test_rejects_mixed_inventory_observation_times(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            _, sales, products = self._minimal_sources(root)
             inventory = self._write(root, "inventory.csv", """sku,available_qty,observed_at
 VOI-RED-M,100,2026-08-15T06:20:00Z
 VOI-RED-M,200,2026-08-15T06:25:00Z
 """)
-            _, sales, products = self._minimal_sources(root)
             with self.assertRaisesRegex(EvidenceValidationError, "must share one observed_at timestamp"):
                 build_inventory_evidence_bundle(inventory, sales, products)
 
@@ -192,12 +192,12 @@ VOI-RED-M,200,2026-08-15T06:25:00Z
     def test_rejects_extra_csv_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            _, sales, products = self._minimal_sources(root)
             inventory = self._write(
                 root,
                 "inventory.csv",
                 "sku,available_qty,observed_at\nVOI-RED-M,300,2026-08-15T06:20:00Z,EXTRA\n",
             )
-            _, sales, products = self._minimal_sources(root)
             with self.assertRaisesRegex(EvidenceValidationError, "more fields than the header"):
                 build_inventory_evidence_bundle(inventory, sales, products)
 
