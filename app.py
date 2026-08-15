@@ -9,6 +9,7 @@ from order_booking import show_order_booking
 from order_confirmation import show_order_confirmation
 from merchandiser_agent import show_merchandiser_agent
 from retailer_analysis import show_retailer_analysis
+from inventory_evidence_bridge import show_inventory_evidence_bridge
 
 # Configure the page
 st.set_page_config(
@@ -64,6 +65,11 @@ with st.sidebar:
         
         # Add a hint about the ECG Market Health Check
         st.info("Access ECG's proprietary market health analysis on major retailers to inform your strategic decisions.")
+
+        if st.button("🧾 Inventory Evidence Bridge", use_container_width=True):
+            st.session_state.page = 'inventory_evidence_bridge'
+
+        st.caption("Normalize read-only ERP/OMS exports into integrity-protected evidence for the Warden runtime.")
         
         # Add access to the merchandiser agent
         st.markdown("### Your Support Team")
@@ -125,6 +131,8 @@ elif st.session_state.page == 'merchandiser_agent':
     show_merchandiser_agent()
 elif st.session_state.page == 'retailer_analysis':
     show_retailer_analysis()
+elif st.session_state.page == 'inventory_evidence_bridge':
+    show_inventory_evidence_bridge()
 
 # Footer
 st.markdown("---")

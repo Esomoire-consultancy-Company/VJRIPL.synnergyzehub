@@ -1,0 +1,65 @@
+{
+  "profileId": "VOI-LOGIC-EVIDENCE-PROFILE-001",
+  "schemaVersion": "1.0.0",
+  "status": "ALPHA_READ_ONLY",
+  "system": {
+    "name": "LOGIC ERP 2.0",
+    "role": "operational source system",
+    "authority": "SOURCE_EVIDENCE_ONLY",
+    "apiState": "NOT_DOCUMENTED_IN_AVAILABLE_MATERIAL",
+    "credentialState": "NOT_PROVISIONED_TO_ALPHA_RUNTIME"
+  },
+  "sourceMode": "READ_ONLY_EXPORT",
+  "contract": "VOI-INVENTORY-EVIDENCE-001",
+  "requiredExports": [
+    {
+      "source": "inventory",
+      "purpose": "point-in-time available stock evidence",
+      "requiredColumns": ["sku", "available_qty", "observed_at"],
+      "expectedGrain": "one or more rows per SKU/location at a common observation time"
+    },
+    {
+      "source": "sales",
+      "purpose": "recent demand evidence",
+      "requiredColumns": ["sku", "units_sold", "sales_date"],
+      "expectedGrain": "sales quantity by SKU and date"
+    },
+    {
+      "source": "product_master",
+      "purpose": "commercial and replenishment parameters",
+      "requiredColumns": ["sku", "unit_cost", "lead_time_days"],
+      "optionalColumns": ["campaign_uplift_pct"],
+      "expectedGrain": "one row per SKU"
+    },
+    {
+      "source": "open_orders",
+      "purpose": "confirmed inbound supply evidence",
+      "requiredColumns": ["sku", "inbound_qty", "expected_date"],
+      "optional": true,
+      "expectedGrain": "open inbound quantity by SKU and expected date"
+    }
+  ],
+  "controls": {
+    "sourceFilesAreReadOnly": true,
+    "sourceFileSha256Required": true,
+    "unknownSkuRejected": true,
+    "futureSalesRejected": true,
+    "overdueInboundExcludedFromConfirmedInbound": true,
+    "bundleIntegrity": "SHA-256_CANONICAL_PAYLOAD",
+    "agentReceivesProviderCredentials": false,
+    "executionAuthority": "NONE",
+    "downstreamAuthorityResolver": "WARDEN-AUTH-001"
+  },
+  "transitionToLiveAdapter": {
+    "state": "BLOCKED_PENDING_PROVIDER_CONTRACT",
+    "requiredEvidence": [
+      "LOGIC endpoint or export-job specification",
+      "authentication and credential custody model",
+      "read scopes for inventory, sales, product master and open orders",
+      "provider rate limits and pagination rules",
+      "field dictionary and timestamp semantics",
+      "authoritative source-of-truth designation",
+      "Warden-approved service principal and secret delivery path"
+    ]
+  }
+}

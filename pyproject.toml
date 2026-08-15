@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "repl-nix-workspace"
 version = "0.1.0"
-description = "Add your description here"
+description = "VOI buying-house portal and read-only Warden evidence bridge"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=2.2.4",
@@ -9,4 +13,11 @@ dependencies = [
     "plotly>=6.0.1",
     "streamlit>=1.44.0",
     "yfinance>=0.2.55",
+]
+
+[tool.setuptools]
+py-modules = [
+    "voi_evidence_adapter",
+    "export_voi_inventory_evidence",
+    "inventory_evidence_bridge",
 ]
