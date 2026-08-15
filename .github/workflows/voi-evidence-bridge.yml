@@ -1,0 +1,34 @@
+name: VOI Evidence Bridge CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  evidence-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile bridge modules
+        run: |
+          python -m py_compile \
+            voi_evidence_adapter.py \
+            export_voi_inventory_evidence.py \
+            inventory_evidence_bridge.py \
+            app.py
+
+      - name: Run evidence contract tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
