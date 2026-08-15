@@ -26,8 +26,14 @@ def main() -> int:
     )
     destination = Path(args.out)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(f"wrote {bundle['contract']} {bundle['bundleId']} with {len(bundle['snapshots'])} snapshots to {destination}")
+    destination.write_text(
+        json.dumps(bundle, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    print(
+        f"wrote {bundle['contract']} {bundle['bundleId']} "
+        f"with {len(bundle['payload']['snapshots'])} snapshots to {destination}"
+    )
     return 0
 
 
