@@ -18,11 +18,11 @@ TEMPLATES = {
 }
 
 
-def _persist_upload(root: Path, uploaded_file) -> Path:
+def _persist_upload(root: Path, uploaded_file, source_slot: str) -> Path:
     safe_name = Path(uploaded_file.name).name
     if not safe_name.lower().endswith(".csv"):
         raise EvidenceValidationError(f"Only CSV exports are accepted: {safe_name}")
-    destination = root / safe_name
+    destination = root / f"{source_slot}.csv"
     destination.write_bytes(uploaded_file.getvalue())
     return destination
 
@@ -76,10 +76,14 @@ def show_inventory_evidence_bridge():
     try:
         with tempfile.TemporaryDirectory(prefix="voi-evidence-") as tmp:
             root = Path(tmp)
-            inventory_path = _persist_upload(root, inventory_file)
-            sales_path = _persist_upload(root, sales_file)
-            product_path = _persist_upload(root, product_file)
-            orders_path = _persist_upload(root, orders_file) if orders_file is not None else None
+            inventory_path = _persist_upload(root, inventory_file, "inventory")
+            sales_path = _persist_upload(root, sales_file, "sales")
+            product_path = _persist_upload(root, product_file, "product_master")
+            orders_path = (
+                _persist_upload(root, orders_file, "open_orders")
+                if orders_file is not None
+                else None
+            )
 
             bundle = build_inventory_evidence_bundle(
                 inventory_path,
@@ -139,7 +143,7 @@ def show_inventory_evidence_bridge():
         ]
         st.dataframe(pd.DataFrame(source_rows), use_container_width=True, hide_index=True)
 
-    bundle_json = json.dumps(bundle, indent=2, sort_keys=True) + "\n"
+    bundle_json = json.dumps(bundle, indent=2, sort_keys=True, allow_nan=False) + "\n"
     st.download_button(
         "Export Warden evidence JSON",
         data=bundle_json,
