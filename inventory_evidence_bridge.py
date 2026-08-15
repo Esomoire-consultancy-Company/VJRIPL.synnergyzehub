@@ -10,6 +10,14 @@ import streamlit as st
 from voi_evidence_adapter import EvidenceValidationError, build_inventory_evidence_bundle
 
 
+TEMPLATES = {
+    "inventory.csv": "sku,available_qty,observed_at\n",
+    "sales.csv": "sku,units_sold,sales_date\n",
+    "product_master.csv": "sku,unit_cost,lead_time_days,campaign_uplift_pct\n",
+    "open_orders.csv": "sku,inbound_qty,expected_date\n",
+}
+
+
 def _persist_upload(root: Path, uploaded_file) -> Path:
     safe_name = Path(uploaded_file.name).name
     if not safe_name.lower().endswith(".csv"):
@@ -21,18 +29,31 @@ def _persist_upload(root: Path, uploaded_file) -> Path:
 
 def show_inventory_evidence_bridge():
     st.title("VOI Inventory Evidence Bridge")
-    st.caption("Read-only ERP/OMS export normalization for the Warden cognitive runtime")
+    st.caption("Read-only LOGIC ERP / OMS export normalization for the Warden cognitive runtime")
 
     st.info(
         "This bridge does not connect with ERP credentials and cannot place orders, change inventory, or transfer funds. "
         "It converts operator-supplied CSV exports into an integrity-protected evidence bundle."
     )
 
-    with st.expander("Required CSV contracts", expanded=False):
+    with st.expander("Source contract and blank templates", expanded=False):
+        st.markdown("**VOI-LOGIC-EVIDENCE-PROFILE-001** uses report/export ingestion until a provider API contract and governed service principal are available.")
         st.code("inventory.csv: sku,available_qty,observed_at", language="text")
         st.code("sales.csv: sku,units_sold,sales_date", language="text")
-        st.code("product.csv: sku,unit_cost,lead_time_days[,campaign_uplift_pct]", language="text")
+        st.code("product_master.csv: sku,unit_cost,lead_time_days[,campaign_uplift_pct]", language="text")
         st.code("open_orders.csv (optional): sku,inbound_qty,expected_date", language="text")
+
+        template_cols = st.columns(2)
+        for index, (name, data) in enumerate(TEMPLATES.items()):
+            with template_cols[index % 2]:
+                st.download_button(
+                    f"Download {name}",
+                    data=data,
+                    file_name=name,
+                    mime="text/csv",
+                    key=f"template_{name}",
+                    use_container_width=True,
+                )
 
     col1, col2 = st.columns(2)
     with col1:
