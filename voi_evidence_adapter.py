@@ -77,7 +77,7 @@ def _read_csv(path: Path, source_name: str) -> tuple[list[dict[str, str]], Sourc
     if not reader.fieldnames:
         raise EvidenceValidationError(f"{source_name} has no header row")
     rows = [{k: (v or "").strip() for k, v in row.items()} for row in reader]
-    return rows, SourceFileEvidence(source_name, str(path), digest, len(rows))
+    return rows, SourceFileEvidence(source_name, path.name, digest, len(rows))
 
 
 def _require_columns(rows: list[dict[str, str]], columns: Iterable[str], source_name: str) -> None:
