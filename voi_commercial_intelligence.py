@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from datetime import datetime, timezone
 
@@ -344,3 +346,155 @@ def build_replenishment_recommendations(
         recommendations,
         key=lambda item: (item["regionId"], item["sku"]),
     )
+
+
+def detect_assortment_risks(
+    inventory_bundle: dict,
+    *,
+    slow_stock_days: int = 45,
+) -> tuple[list[dict], dict]:
+    validate_inventory_bundle(inventory_bundle)
+    if slow_stock_days <= 0:
+        raise CommercialIntelligenceValidationError(
+            "slow_stock_days must be positive"
+        )
+
+    snapshots = inventory_bundle["payload"]["snapshots"]
+    risks = []
+
+    for snapshot in snapshots:
+        available = float(snapshot["available"])
+        demand = float(snapshot["avgDailyDemand"])
+        cover = _days_cover(snapshot)
+        if available > 0 and (
+            demand == 0
+            or (cover is not None and cover > slow_stock_days)
+        ):
+            risks.append(
+                {
+                    "riskType": "SLOW_STOCK",
+                    "sku": snapshot["sku"],
+                    "daysCover": cover,
+                    "available": available,
+                    "evidenceRefs": sorted(set(snapshot["evidenceRefs"])),
+                }
+            )
+
+    lineage_ready = all(
+        "styleId" in item and "size" in item
+        for item in snapshots
+    )
+    capability = {
+        "brokenSizeDetection": (
+            "AVAILABLE"
+            if lineage_ready
+            else "INSUFFICIENT_STYLE_SIZE_EVIDENCE"
+        )
+    }
+
+    if lineage_ready:
+        by_style: dict[str, list[dict]] = {}
+        for snapshot in snapshots:
+            by_style.setdefault(str(snapshot["styleId"]), []).append(snapshot)
+
+        for style_id, items in sorted(by_style.items()):
+            present = sorted(
+                str(item["size"])
+                for item in items
+                if float(item["available"]) > 0
+            )
+            missing = sorted(
+                str(item["size"])
+                for item in items
+                if float(item["available"]) == 0
+            )
+            if present and missing:
+                evidence_refs = sorted(
+                    {
+                        ref
+                        for item in items
+                        for ref in item["evidenceRefs"]
+                    }
+                )
+                risks.append(
+                    {
+                        "riskType": "BROKEN_SIZE",
+                        "styleId": style_id,
+                        "presentSizes": present,
+                        "missingSizes": missing,
+                        "evidenceRefs": evidence_refs,
+                    }
+                )
+
+    risks.sort(
+        key=lambda item: (
+            item["riskType"],
+            item.get("styleId", ""),
+            item.get("sku", ""),
+        )
+    )
+    return risks, capability
+
+
+def _canonical_json(payload: dict) -> str:
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def _sha256_id(payload: dict) -> str:
+    return "sha256:" + hashlib.sha256(
+        _canonical_json(payload).encode("utf-8")
+    ).hexdigest()
+
+
+def build_recommendation_ledger(
+    inventory_bundle: dict,
+    recommendations: list[dict],
+    risks: list[dict],
+    capability_state: dict,
+    *,
+    model_version: str = MODEL_VERSION,
+) -> dict:
+    validate_inventory_bundle(inventory_bundle)
+    source_bundle_id = inventory_bundle["bundleId"]
+
+    with_ids = []
+    for recommendation in recommendations:
+        business_payload = {
+            "modelVersion": model_version,
+            "sourceBundleId": source_bundle_id,
+            "recommendation": recommendation,
+        }
+        with_ids.append(
+            {
+                "recommendationId": _sha256_id(business_payload),
+                **recommendation,
+            }
+        )
+
+    canonical = {
+        "schemaVersion": "1.0.0",
+        "contract": "VOI-COMMERCIAL-INTELLIGENCE-001",
+        "modelVersion": model_version,
+        "sourceBundleId": source_bundle_id,
+        "evidenceObservedAt": inventory_bundle["payload"]["observedAt"],
+        "recommendations": sorted(
+            with_ids,
+            key=lambda item: item["recommendationId"],
+        ),
+        "risks": sorted(risks, key=lambda item: _canonical_json(item)),
+        "capabilityState": dict(sorted(capability_state.items())),
+    }
+    ledger_id = _sha256_id(canonical)
+    return {
+        **canonical,
+        "integrity": {
+            "algorithm": "SHA-256",
+            "digest": ledger_id,
+        },
+        "ledgerId": ledger_id,
+    }
