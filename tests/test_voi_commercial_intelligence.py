@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from commercial_intelligence_bridge import _parse_signal_csv_bytes
 from voi_commercial_intelligence import (
     CommercialIntelligenceValidationError,
     build_demand_matrix,
@@ -362,6 +361,8 @@ class CommercialIntelligenceTests(unittest.TestCase):
             self.assertNotIn(token, source)
 
     def test_signal_csv_parser_returns_source_rows(self):
+        from commercial_intelligence_bridge import _parse_signal_csv_bytes
+
         rows = _parse_signal_csv_bytes(
             b"sku,region_id,signal_type,signal_value,observed_at\n"
             b"VOI-BLUE-32,BLR-NORTH,PURCHASE,2,2026-09-08T04:00:00Z\n"
