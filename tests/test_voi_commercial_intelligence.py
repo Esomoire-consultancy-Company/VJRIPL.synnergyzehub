@@ -1,3 +1,4 @@
+import copy
 import sys
 import unittest
 from pathlib import Path
@@ -9,7 +10,9 @@ if str(ROOT) not in sys.path:
 from voi_commercial_intelligence import (
     CommercialIntelligenceValidationError,
     build_demand_matrix,
+    build_recommendation_ledger,
     build_replenishment_recommendations,
+    detect_assortment_risks,
     normalize_demand_signals,
     route_ready_goods,
     validate_inventory_bundle,
@@ -240,6 +243,105 @@ class CommercialIntelligenceTests(unittest.TestCase):
             blue["evidenceRefs"],
             ["evidence:voi-export:inventory:abc"],
         )
+
+    def test_detects_zero_demand_stock_as_slow_stock(self):
+        bundle = self._bundle()
+        bundle["payload"]["snapshots"][0]["avgDailyDemand"] = 0.0
+        risks, capability = detect_assortment_risks(bundle)
+        blue = next(item for item in risks if item["sku"] == "VOI-BLUE-32")
+        self.assertEqual(blue["riskType"], "SLOW_STOCK")
+        self.assertEqual(
+            capability["brokenSizeDetection"],
+            "INSUFFICIENT_STYLE_SIZE_EVIDENCE",
+        )
+
+    def test_does_not_infer_broken_sizes_from_sku_text(self):
+        risks, capability = detect_assortment_risks(self._bundle())
+        self.assertFalse(any(item["riskType"] == "BROKEN_SIZE" for item in risks))
+        self.assertEqual(
+            capability["brokenSizeDetection"],
+            "INSUFFICIENT_STYLE_SIZE_EVIDENCE",
+        )
+
+    def test_detects_broken_sizes_only_with_explicit_lineage(self):
+        bundle = self._bundle()
+        base = bundle["payload"]["snapshots"][0]
+        bundle["payload"]["snapshots"] = [
+            {
+                **base,
+                "sku": "S32",
+                "styleId": "STYLE-1",
+                "size": "32",
+                "available": 10.0,
+            },
+            {
+                **base,
+                "sku": "S34",
+                "styleId": "STYLE-1",
+                "size": "34",
+                "available": 0.0,
+            },
+            {
+                **base,
+                "sku": "S36",
+                "styleId": "STYLE-1",
+                "size": "36",
+                "available": 12.0,
+            },
+        ]
+        risks, capability = detect_assortment_risks(bundle)
+        broken = next(item for item in risks if item["riskType"] == "BROKEN_SIZE")
+        self.assertEqual(broken["styleId"], "STYLE-1")
+        self.assertEqual(broken["missingSizes"], ["34"])
+        self.assertEqual(capability["brokenSizeDetection"], "AVAILABLE")
+
+    def test_intelligence_ledger_is_deterministic_and_evidence_linked(self):
+        bundle = self._bundle()
+        routes = route_ready_goods(build_demand_matrix(bundle))
+        recommendations = build_replenishment_recommendations(routes)
+        risks, capability = detect_assortment_risks(bundle)
+        first = build_recommendation_ledger(
+            bundle,
+            recommendations,
+            risks,
+            capability,
+        )
+        second = build_recommendation_ledger(
+            copy.deepcopy(bundle),
+            copy.deepcopy(recommendations),
+            copy.deepcopy(risks),
+            copy.deepcopy(capability),
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(first["contract"], "VOI-COMMERCIAL-INTELLIGENCE-001")
+        self.assertEqual(first["modelVersion"], "VOI-CI-R0.1")
+        self.assertEqual(first["sourceBundleId"], bundle["bundleId"])
+        self.assertEqual(
+            first["evidenceObservedAt"],
+            bundle["payload"]["observedAt"],
+        )
+        self.assertNotIn("generatedAt", first)
+        self.assertEqual(first["integrity"]["digest"], first["ledgerId"])
+        for recommendation in first["recommendations"]:
+            self.assertTrue(recommendation["recommendationId"].startswith("sha256:"))
+            self.assertEqual(recommendation["authorityState"], "RECOMMENDED_ONLY")
+            self.assertTrue(recommendation["evidenceRefs"])
+
+    def test_commercial_intelligence_module_has_no_external_io_imports(self):
+        source = (ROOT / "voi_commercial_intelligence.py").read_text(
+            encoding="utf-8"
+        )
+        forbidden = [
+            "requests",
+            "httpx",
+            "urllib.request",
+            "subprocess",
+            "socket",
+            "sqlalchemy",
+            "psycopg",
+        ]
+        for token in forbidden:
+            self.assertNotIn(token, source)
 
 
 if __name__ == "__main__":
