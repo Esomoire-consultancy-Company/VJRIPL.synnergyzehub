@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -9,12 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from commercial_intelligence_bridge import _parse_signal_csv_bytes
 from voi_commercial_intelligence import (
     MODEL_VERSION,
     CommercialIntelligenceValidationError,
     build_demand_matrix,
+    build_recommendation_ledger,
     build_replenishment_recommendations,
+    detect_assortment_risks,
     normalize_demand_signals,
     route_ready_goods,
     validate_inventory_bundle,
@@ -96,11 +98,13 @@ class ReviewRegressionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             CommercialIntelligenceValidationError,
-            "snapshot\[0\] must be an object",
+            "snapshot\\[0\\] must be an object",
         ):
             validate_inventory_bundle(bundle)
 
     def test_rejects_non_utf8_signal_csv_with_contract_error(self):
+        from commercial_intelligence_bridge import _parse_signal_csv_bytes
+
         with self.assertRaisesRegex(
             CommercialIntelligenceValidationError,
             "must be UTF-8",
@@ -167,6 +171,106 @@ class ReviewRegressionTests(unittest.TestCase):
         routes = route_ready_goods(build_demand_matrix(_sealed_bundle()))
         recommendation = build_replenishment_recommendations(routes)[0]
         self.assertEqual(recommendation["modelVersion"], MODEL_VERSION)
+
+    def test_rejects_non_string_timestamp_with_contract_error(self):
+        bundle = _sealed_bundle()
+        bundle["payload"]["observedAt"] = 12345
+        _reseal(bundle)
+
+        with self.assertRaisesRegex(
+            CommercialIntelligenceValidationError,
+            "payload.observedAt must be an ISO-8601 string",
+        ):
+            validate_inventory_bundle(bundle)
+
+    def test_rejects_nan_payload_with_contract_error(self):
+        bundle = _sealed_bundle()
+        bundle["payload"]["snapshots"][0]["available"] = math.nan
+
+        with self.assertRaisesRegex(
+            CommercialIntelligenceValidationError,
+            "canonical JSON",
+        ):
+            validate_inventory_bundle(bundle)
+
+    def test_rejects_non_string_snapshot_sku(self):
+        bundle = _sealed_bundle()
+        bundle["payload"]["snapshots"][0]["sku"] = 123
+        _reseal(bundle)
+
+        with self.assertRaisesRegex(
+            CommercialIntelligenceValidationError,
+            "snapshot\\[0\\].sku must be a string",
+        ):
+            validate_inventory_bundle(bundle)
+
+    def test_rejects_non_string_evidence_reference(self):
+        bundle = _sealed_bundle()
+        bundle["payload"]["snapshots"][0]["evidenceRefs"] = [123]
+        _reseal(bundle)
+
+        with self.assertRaisesRegex(
+            CommercialIntelligenceValidationError,
+            "evidenceRefs must contain strings",
+        ):
+            validate_inventory_bundle(bundle)
+
+    def test_regional_recommendations_do_not_double_count_shared_stock(self):
+        bundle = _sealed_bundle()
+        signals = normalize_demand_signals(
+            [
+                {
+                    "sku": "VOI-BLUE-32",
+                    "region_id": "BLR-NORTH",
+                    "signal_type": "PURCHASE",
+                    "signal_value": "56",
+                    "observed_at": "2026-09-08T04:00:00Z",
+                },
+                {
+                    "sku": "VOI-BLUE-32",
+                    "region_id": "BLR-SOUTH",
+                    "signal_type": "PURCHASE",
+                    "signal_value": "56",
+                    "observed_at": "2026-09-08T04:00:00Z",
+                },
+            ],
+            inventory_bundle=bundle,
+        )
+        routes = route_ready_goods(build_demand_matrix(bundle, signals))
+        recommendations = build_replenishment_recommendations(routes)
+
+        self.assertEqual(len(recommendations), 2)
+        for recommendation in recommendations:
+            self.assertIsNone(recommendation["recommendedQty"])
+            self.assertEqual(
+                recommendation["quantityState"],
+                "UNQUANTIFIED_SHARED_STOCK",
+            )
+
+    def test_replenishment_rejects_non_positive_target_cover(self):
+        routes = route_ready_goods(build_demand_matrix(_sealed_bundle()))
+        with self.assertRaisesRegex(
+            CommercialIntelligenceValidationError,
+            "target_days_cover must be >= 1",
+        ):
+            build_replenishment_recommendations(routes, target_days_cover=0)
+
+    def test_ledger_overrides_supplied_recommendation_id(self):
+        bundle = _sealed_bundle()
+        routes = route_ready_goods(build_demand_matrix(bundle))
+        recommendations = build_replenishment_recommendations(routes)
+        recommendations[0]["recommendationId"] = "sha256:attacker-controlled"
+        risks, capability = detect_assortment_risks(bundle)
+
+        ledger = build_recommendation_ledger(
+            bundle,
+            recommendations,
+            risks,
+            capability,
+        )
+        emitted_id = ledger["recommendations"][0]["recommendationId"]
+        self.assertNotEqual(emitted_id, "sha256:attacker-controlled")
+        self.assertTrue(emitted_id.startswith("sha256:"))
 
 
 if __name__ == "__main__":
