@@ -5,6 +5,7 @@ import math
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -73,7 +74,6 @@ class ReviewRegressionTests(unittest.TestCase):
         bundle = _sealed_bundle()
         tampered = copy.deepcopy(bundle)
         tampered["payload"]["snapshots"][0]["available"] = 9999.0
-
         with self.assertRaisesRegex(
             CommercialIntelligenceValidationError,
             "integrity digest mismatch",
@@ -84,7 +84,6 @@ class ReviewRegressionTests(unittest.TestCase):
         bundle = _sealed_bundle()
         bundle["payload"]["snapshots"][0]["leadTimeDays"] = 1.9
         _reseal(bundle)
-
         with self.assertRaisesRegex(
             CommercialIntelligenceValidationError,
             "leadTimeDays must be an integer",
@@ -95,7 +94,6 @@ class ReviewRegressionTests(unittest.TestCase):
         bundle = _sealed_bundle()
         bundle["payload"]["snapshots"] = ["not-an-object"]
         _reseal(bundle)
-
         with self.assertRaisesRegex(
             CommercialIntelligenceValidationError,
             "snapshot\\[0\\] must be an object",
@@ -116,7 +114,6 @@ class ReviewRegressionTests(unittest.TestCase):
         blue = bundle["payload"]["snapshots"][0]
         blue["available"] = 5.0
         blue["avgDailyDemand"] = 0.0
-
         black = copy.deepcopy(blue)
         black["sku"] = "VOI-BLACK-34"
         black["available"] = 5.0
@@ -126,28 +123,22 @@ class ReviewRegressionTests(unittest.TestCase):
         _reseal(bundle)
 
         signals = normalize_demand_signals(
-            [
-                {
-                    "sku": "VOI-BLUE-32",
-                    "region_id": "BLR-NORTH",
-                    "signal_type": "PURCHASE",
-                    "signal_value": "28",
-                    "observed_at": "2026-09-08T04:00:00Z",
-                }
-            ],
+            [{
+                "sku": "VOI-BLUE-32",
+                "region_id": "BLR-NORTH",
+                "signal_type": "PURCHASE",
+                "signal_value": "28",
+                "observed_at": "2026-09-08T04:00:00Z",
+            }],
             inventory_bundle=bundle,
         )
-        matrix = build_demand_matrix(bundle, signals)
-        routes = route_ready_goods(matrix, target_days_cover=14)
-
+        routes = route_ready_goods(build_demand_matrix(bundle, signals), target_days_cover=14)
         blue_row = next(row for row in routes if row["sku"] == "VOI-BLUE-32")
         black_row = next(row for row in routes if row["sku"] == "VOI-BLACK-34")
-
         self.assertEqual(blue_row["baselineAvgDailyDemand"], 0.0)
         self.assertEqual(blue_row["effectiveDailyDemand"], 2.0)
         self.assertEqual(blue_row["demandBasis"], "REGIONAL_SIGNAL_EQUIVALENT_DAILY_RATE")
         self.assertEqual(blue_row["routeClass"], "REPLENISH")
-
         self.assertEqual(black_row["baselineAvgDailyDemand"], 10.0)
         self.assertEqual(black_row["effectiveDailyDemand"], 0.0)
         self.assertEqual(black_row["routeClass"], "HOLD")
@@ -159,11 +150,7 @@ class ReviewRegressionTests(unittest.TestCase):
         snapshot["confirmedInbound"] = 2.0
         snapshot["avgDailyDemand"] = 1.0
         _reseal(bundle)
-
-        route = route_ready_goods(
-            build_demand_matrix(bundle),
-            target_days_cover=14,
-        )[0]
+        route = route_ready_goods(build_demand_matrix(bundle), target_days_cover=14)[0]
         self.assertEqual(route["routeClass"], "REPLENISH")
         self.assertEqual(route["routeRule"], "LOW_DAYS_COVER_WITH_INBOUND_ONLY")
 
@@ -176,7 +163,6 @@ class ReviewRegressionTests(unittest.TestCase):
         bundle = _sealed_bundle()
         bundle["payload"]["observedAt"] = 12345
         _reseal(bundle)
-
         with self.assertRaisesRegex(
             CommercialIntelligenceValidationError,
             "payload.observedAt must be an ISO-8601 string",
@@ -186,7 +172,6 @@ class ReviewRegressionTests(unittest.TestCase):
     def test_rejects_nan_payload_with_contract_error(self):
         bundle = _sealed_bundle()
         bundle["payload"]["snapshots"][0]["available"] = math.nan
-
         with self.assertRaisesRegex(
             CommercialIntelligenceValidationError,
             "canonical JSON",
@@ -197,7 +182,6 @@ class ReviewRegressionTests(unittest.TestCase):
         bundle = _sealed_bundle()
         bundle["payload"]["snapshots"][0]["sku"] = 123
         _reseal(bundle)
-
         with self.assertRaisesRegex(
             CommercialIntelligenceValidationError,
             "snapshot\\[0\\].sku must be a string",
@@ -208,7 +192,6 @@ class ReviewRegressionTests(unittest.TestCase):
         bundle = _sealed_bundle()
         bundle["payload"]["snapshots"][0]["evidenceRefs"] = [123]
         _reseal(bundle)
-
         with self.assertRaisesRegex(
             CommercialIntelligenceValidationError,
             "evidenceRefs must contain strings",
@@ -219,33 +202,18 @@ class ReviewRegressionTests(unittest.TestCase):
         bundle = _sealed_bundle()
         signals = normalize_demand_signals(
             [
-                {
-                    "sku": "VOI-BLUE-32",
-                    "region_id": "BLR-NORTH",
-                    "signal_type": "PURCHASE",
-                    "signal_value": "56",
-                    "observed_at": "2026-09-08T04:00:00Z",
-                },
-                {
-                    "sku": "VOI-BLUE-32",
-                    "region_id": "BLR-SOUTH",
-                    "signal_type": "PURCHASE",
-                    "signal_value": "56",
-                    "observed_at": "2026-09-08T04:00:00Z",
-                },
+                {"sku": "VOI-BLUE-32", "region_id": "BLR-NORTH", "signal_type": "PURCHASE", "signal_value": "56", "observed_at": "2026-09-08T04:00:00Z"},
+                {"sku": "VOI-BLUE-32", "region_id": "BLR-SOUTH", "signal_type": "PURCHASE", "signal_value": "56", "observed_at": "2026-09-08T04:00:00Z"},
             ],
             inventory_bundle=bundle,
         )
-        routes = route_ready_goods(build_demand_matrix(bundle, signals))
-        recommendations = build_replenishment_recommendations(routes)
-
+        recommendations = build_replenishment_recommendations(
+            route_ready_goods(build_demand_matrix(bundle, signals))
+        )
         self.assertEqual(len(recommendations), 2)
         for recommendation in recommendations:
             self.assertIsNone(recommendation["recommendedQty"])
-            self.assertEqual(
-                recommendation["quantityState"],
-                "UNQUANTIFIED_SHARED_STOCK",
-            )
+            self.assertEqual(recommendation["quantityState"], "UNQUANTIFIED_SHARED_STOCK")
 
     def test_replenishment_rejects_non_positive_target_cover(self):
         routes = route_ready_goods(build_demand_matrix(_sealed_bundle()))
@@ -257,20 +225,52 @@ class ReviewRegressionTests(unittest.TestCase):
 
     def test_ledger_overrides_supplied_recommendation_id(self):
         bundle = _sealed_bundle()
-        routes = route_ready_goods(build_demand_matrix(bundle))
-        recommendations = build_replenishment_recommendations(routes)
+        recommendations = build_replenishment_recommendations(
+            route_ready_goods(build_demand_matrix(bundle))
+        )
         recommendations[0]["recommendationId"] = "sha256:attacker-controlled"
         risks, capability = detect_assortment_risks(bundle)
-
-        ledger = build_recommendation_ledger(
-            bundle,
-            recommendations,
-            risks,
-            capability,
-        )
+        ledger = build_recommendation_ledger(bundle, recommendations, risks, capability)
         emitted_id = ledger["recommendations"][0]["recommendationId"]
         self.assertNotEqual(emitted_id, "sha256:attacker-controlled")
         self.assertTrue(emitted_id.startswith("sha256:"))
+
+    def test_bridge_converts_input_shape_error_to_rejection_state(self):
+        import commercial_intelligence_bridge as bridge
+
+        class FakeStreamlit:
+            def __init__(self):
+                self.session_state = {"voi_inventory_evidence_bundle": _sealed_bundle()}
+                self.errors: list[str] = []
+
+            def title(self, *args, **kwargs):
+                pass
+
+            def caption(self, *args, **kwargs):
+                pass
+
+            def warning(self, *args, **kwargs):
+                pass
+
+            def info(self, *args, **kwargs):
+                pass
+
+            def file_uploader(self, *args, **kwargs):
+                return None
+
+            def error(self, message):
+                self.errors.append(message)
+
+        fake_st = FakeStreamlit()
+        with patch.object(bridge, "st", fake_st), patch.object(
+            bridge,
+            "validate_inventory_bundle",
+            side_effect=KeyError("malformed field"),
+        ):
+            bridge.show_commercial_intelligence_bridge()
+
+        self.assertEqual(len(fake_st.errors), 1)
+        self.assertIn("Commercial intelligence rejected", fake_st.errors[0])
 
 
 if __name__ == "__main__":
