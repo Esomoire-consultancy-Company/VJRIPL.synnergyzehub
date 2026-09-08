@@ -20,4 +20,6 @@ py-modules = [
     "voi_evidence_adapter",
     "export_voi_inventory_evidence",
     "inventory_evidence_bridge",
+    "voi_commercial_intelligence",
+    "commercial_intelligence_bridge",
 ]
