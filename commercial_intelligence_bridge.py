@@ -125,7 +125,13 @@ def show_commercial_intelligence_bridge() -> None:
             risks,
             capability_state,
         )
-    except CommercialIntelligenceValidationError as exc:
+    except (
+        CommercialIntelligenceValidationError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        ValueError,
+    ) as exc:
         st.error(f"Commercial intelligence rejected: {exc}")
         return
 
