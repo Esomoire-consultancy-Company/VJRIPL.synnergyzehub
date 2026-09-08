@@ -240,7 +240,7 @@ For `REPLENISH` rows, calculate a target quantity:
 
 ```text
 target_stock = avgDailyDemand × target_days_cover
-recommended_qty = max(0, target_stock - confirmedInbound)
+recommended_qty = max(0, target_stock - available - confirmedInbound)
 ```
 
 The R0.1 recommendation is advisory. It does not infer a source warehouse or execute a transfer because the current evidence contract does not contain location-level source stock.
@@ -295,7 +295,7 @@ Top-level fields:
   "contract": "VOI-COMMERCIAL-INTELLIGENCE-001",
   "modelVersion": "VOI-CI-R0.1",
   "sourceBundleId": "sha256:...",
-  "generatedAt": "...",
+  "evidenceObservedAt": "2026-09-08T04:30:00Z",
   "recommendations": [],
   "risks": [],
   "capabilityState": {},
@@ -305,6 +305,8 @@ Top-level fields:
   }
 }
 ```
+
+`evidenceObservedAt` comes from the source evidence bundle. R0.1 deliberately excludes wall-clock generation time from the canonical ledger so identical inputs produce identical outputs.
 
 Each recommendation receives a deterministic `recommendationId` calculated from its canonical business payload plus `sourceBundleId` and `modelVersion`.
 
@@ -371,7 +373,7 @@ R0.1 is acceptable when:
 
 - the existing evidence contract and tests remain green;
 - all new intelligence tests pass;
-- output is deterministic for identical evidence and signals;
+- the complete canonical intelligence output is deterministic for identical evidence and signals;
 - no operational write integration exists;
 - the UI can consume a validated evidence bundle and export a recommendation ledger;
 - every recommendation is evidence-linked and `RECOMMENDED_ONLY`;
