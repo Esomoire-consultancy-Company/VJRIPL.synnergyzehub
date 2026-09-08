@@ -12,9 +12,12 @@ import streamlit as st
 from estate_registry import (
     CommercialCase,
     CommercialGuardrails,
+    DealRecord,
     EstateRegistry,
+    ExecutionIntentRecord,
     GuardrailDecision,
     PossibilityRecord,
+    PropositionRecord,
     seed_voi_capabilities,
 )
 
@@ -33,6 +36,14 @@ class BoardSummary:
     estimated_value: float
     estimated_contribution: float
     expired_count: int
+
+
+@dataclass(frozen=True)
+class GovernanceSummary:
+    proposition_count: int
+    deal_count: int
+    execution_intent_count: int
+    all_intents_no_external_effect: bool
 
 
 _CHANNEL_TEMPLATES = {
@@ -103,6 +114,24 @@ def build_board_summary(
     )
 
 
+def build_governance_summary(
+    propositions: Iterable[PropositionRecord],
+    deals: Iterable[DealRecord],
+    execution_intents: Iterable[ExecutionIntentRecord],
+) -> GovernanceSummary:
+    proposition_records = list(propositions)
+    deal_records = list(deals)
+    intent_records = list(execution_intents)
+    return GovernanceSummary(
+        proposition_count=len(proposition_records),
+        deal_count=len(deal_records),
+        execution_intent_count=len(intent_records),
+        all_intents_no_external_effect=all(
+            item.effect_state == "NO_EXTERNAL_EFFECT" for item in intent_records
+        ),
+    )
+
+
 def _registry_path() -> Path:
     configured = os.getenv("ESTATE_DB_PATH")
     path = Path(configured) if configured else Path(".estate") / "estate_alpha.db"
@@ -120,8 +149,12 @@ def _registry() -> EstateRegistry:
 def show_estate_board() -> None:
     registry = _registry()
     possibilities = registry.list_possibilities()
+    propositions = registry.list_propositions()
+    deals = registry.list_deals()
+    execution_intents = registry.list_execution_intents()
     now = datetime.now(timezone.utc)
     summary = build_board_summary(possibilities, observed_at=now)
+    governance = build_governance_summary(propositions, deals, execution_intents)
 
     st.title("Estate Board")
     st.caption("VOI / Voyej — Estate Client 001 | Possibility → Reality commercial operating layer")
@@ -136,8 +169,8 @@ def show_estate_board() -> None:
     metrics[2].metric("Estimated contribution", f"₹{summary.estimated_contribution:,.0f}")
     metrics[3].metric("Needs requalification", summary.expired_count)
 
-    portfolio_tab, intake_tab, capability_tab = st.tabs(
-        ["Possibility Portfolio", "Create Possibility", "Capability Ledger"]
+    portfolio_tab, intake_tab, capability_tab, governance_tab = st.tabs(
+        ["Possibility Portfolio", "Create Possibility", "Capability Ledger", "Governance Chain"]
     )
 
     with portfolio_tab:
@@ -148,6 +181,9 @@ def show_estate_board() -> None:
 
     with capability_tab:
         _show_capability_ledger(registry)
+
+    with governance_tab:
+        _show_governance_chain(propositions, deals, execution_intents, governance)
 
 
 def _show_portfolio(possibilities: list[PossibilityRecord], now: datetime) -> None:
@@ -293,4 +329,92 @@ def _show_capability_ledger(registry: EstateRegistry) -> None:
     st.caption(
         "Availability here is an Estate capability assertion. Before any material commitment, the relevant operational "
         "system must provide current evidence and the applicable authority gate must still be satisfied."
+    )
+
+
+def _show_governance_chain(
+    propositions: list[PropositionRecord],
+    deals: list[DealRecord],
+    execution_intents: list[ExecutionIntentRecord],
+    summary: GovernanceSummary,
+) -> None:
+    st.subheader("Governed Commercial Chain")
+    st.caption(
+        "Read-only inspection of persisted Estate governance records. This surface cannot execute an order, reserve ERP "
+        "inventory, publish to a marketplace, or release factory work."
+    )
+
+    metrics = st.columns(4)
+    metrics[0].metric("Propositions", summary.proposition_count)
+    metrics[1].metric("Accepted deals", summary.deal_count)
+    metrics[2].metric("Execution intents", summary.execution_intent_count)
+    metrics[3].metric(
+        "External effects",
+        "None" if summary.all_intents_no_external_effect else "Policy breach",
+    )
+
+    if propositions:
+        st.markdown("### Propositions")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Proposition": item.proposition_id,
+                        "Possibility": item.possibility_id,
+                        "Partner": item.partner,
+                        "Evidence bundle": item.evidence_bundle_id,
+                        "Success criteria": item.success_criteria,
+                    }
+                    for item in propositions
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    if deals:
+        st.markdown("### Deals")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Deal": item.deal_id,
+                        "Proposition": item.proposition_id,
+                        "Acceptance evidence": item.acceptance_evidence_ref,
+                        "Warden decision": item.warden_decision_ref,
+                        "River receipt": item.river_receipt_ref,
+                    }
+                    for item in deals
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    if execution_intents:
+        st.markdown("### Governed execution intents")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Execution intent": item.execution_intent_id,
+                        "Deal": item.deal_id,
+                        "Warden decision": item.warden_decision_ref,
+                        "River receipt": item.river_receipt_ref,
+                        "Idempotency key": item.idempotency_key,
+                        "Effect state": item.effect_state,
+                    }
+                    for item in execution_intents
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    if not propositions and not deals and not execution_intents:
+        st.info("No governed Proposition, Deal or Execution Intent records exist yet.")
+
+    st.warning(
+        "R0.3 execution intent is documentary and non-executing. Any future external effect requires an admitted connector, "
+        "current Warden authorization, provider acknowledgement and River evidence."
     )
