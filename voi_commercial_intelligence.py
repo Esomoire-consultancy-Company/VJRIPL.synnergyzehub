@@ -64,6 +64,21 @@ def _finite_non_negative(value, field: str) -> float:
     return number
 
 
+def _positive_integer(value, field: str) -> int:
+    if isinstance(value, bool):
+        raise CommercialIntelligenceValidationError(f"{field} must be an integer")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise CommercialIntelligenceValidationError(f"{field} must be an integer") from exc
+    if not math.isfinite(number) or not number.is_integer():
+        raise CommercialIntelligenceValidationError(f"{field} must be an integer")
+    parsed = int(number)
+    if parsed < 1:
+        raise CommercialIntelligenceValidationError(f"{field} must be >= 1")
+    return parsed
+
+
 def _canonical_json(payload: dict) -> str:
     return json.dumps(
         payload,
@@ -150,16 +165,7 @@ def validate_inventory_bundle(bundle: dict) -> dict:
         ):
             _finite_non_negative(snapshot[field], f"snapshot[{sku}].{field}")
 
-        try:
-            lead_time_days = int(snapshot["leadTimeDays"])
-        except (TypeError, ValueError) as exc:
-            raise CommercialIntelligenceValidationError(
-                f"snapshot[{sku}].leadTimeDays must be an integer"
-            ) from exc
-        if lead_time_days < 1:
-            raise CommercialIntelligenceValidationError(
-                f"snapshot[{sku}].leadTimeDays must be >= 1"
-            )
+        _positive_integer(snapshot["leadTimeDays"], f"snapshot[{sku}].leadTimeDays")
 
         _parse_datetime(snapshot["observedAt"], f"snapshot[{sku}].observedAt")
         if not isinstance(snapshot["evidenceRefs"], list):
