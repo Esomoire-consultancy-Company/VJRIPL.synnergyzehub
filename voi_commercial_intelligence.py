@@ -13,6 +13,13 @@ ALLOWED_SIGNAL_TYPES = {
     "RETURN",
     "STOCKOUT",
 }
+SIGNAL_WEIGHTS = {
+    "PRODUCT_VIEW": 0.05,
+    "ADD_TO_CART": 0.25,
+    "PURCHASE": 1.0,
+    "RETURN": -1.0,
+    "STOCKOUT": 0.5,
+}
 REQUIRED_SNAPSHOT_FIELDS = {
     "sku",
     "available",
@@ -190,4 +197,150 @@ def normalize_demand_signals(
             item["observedAt"],
             item["signalValue"],
         ),
+    )
+
+
+def _snapshot_by_sku(inventory_bundle: dict) -> dict[str, dict]:
+    return {
+        item["sku"]: item
+        for item in inventory_bundle["payload"]["snapshots"]
+    }
+
+
+def _days_cover(snapshot: dict) -> float | None:
+    demand = float(snapshot["avgDailyDemand"])
+    if demand == 0:
+        return None
+    return (
+        float(snapshot["available"]) + float(snapshot["confirmedInbound"])
+    ) / demand
+
+
+def build_demand_matrix(
+    inventory_bundle: dict,
+    demand_signals: list[dict] | None = None,
+) -> list[dict]:
+    validate_inventory_bundle(inventory_bundle)
+    snapshots = _snapshot_by_sku(inventory_bundle)
+    raw_by_region_sku: dict[tuple[str, str], float] = {}
+
+    if demand_signals:
+        for signal in demand_signals:
+            key = (signal["regionId"], signal["sku"])
+            raw_by_region_sku[key] = raw_by_region_sku.get(key, 0.0) + (
+                SIGNAL_WEIGHTS[signal["signalType"]] * float(signal["signalValue"])
+            )
+        regions = sorted({signal["regionId"] for signal in demand_signals})
+        for region in regions:
+            for sku in snapshots:
+                raw_by_region_sku.setdefault((region, sku), 0.0)
+    else:
+        window = int(inventory_bundle["payload"]["demandWindowDays"])
+        for sku, snapshot in snapshots.items():
+            raw_by_region_sku[("UNSCOPED", sku)] = (
+                float(snapshot["avgDailyDemand"]) * window
+            )
+
+    clamped = {
+        key: max(0.0, value)
+        for key, value in raw_by_region_sku.items()
+    }
+    maxima: dict[str, float] = {}
+    for (region, _sku), value in clamped.items():
+        maxima[region] = max(maxima.get(region, 0.0), value)
+
+    rows = []
+    for (region, sku), raw in sorted(clamped.items()):
+        snapshot = snapshots[sku]
+        maximum = maxima[region]
+        rows.append(
+            {
+                "sku": sku,
+                "regionId": region,
+                "rawIntent": raw,
+                "demandScore": (raw / maximum * 100.0) if maximum > 0 else 0.0,
+                "available": float(snapshot["available"]),
+                "confirmedInbound": float(snapshot["confirmedInbound"]),
+                "avgDailyDemand": float(snapshot["avgDailyDemand"]),
+                "leadTimeDays": int(snapshot["leadTimeDays"]),
+                "daysCover": _days_cover(snapshot),
+                "evidenceRefs": sorted(set(snapshot["evidenceRefs"])),
+            }
+        )
+    return rows
+
+
+def route_ready_goods(
+    demand_matrix: list[dict],
+    *,
+    target_days_cover: int = 14,
+) -> list[dict]:
+    if target_days_cover <= 0:
+        raise CommercialIntelligenceValidationError(
+            "target_days_cover must be positive"
+        )
+
+    routes = []
+    for row in demand_matrix:
+        route = dict(row)
+        total_stock = float(row["available"]) + float(row["confirmedInbound"])
+        if float(row["avgDailyDemand"]) > 0 and total_stock == 0:
+            route_class = "INVESTIGATE"
+            rule = "DEMAND_WITHOUT_READY_OR_INBOUND_STOCK"
+        elif (
+            float(row["avgDailyDemand"]) > 0
+            and row["daysCover"] is not None
+            and float(row["daysCover"]) < target_days_cover
+            and float(row["available"]) > 0
+        ):
+            route_class = "REPLENISH"
+            rule = "LOW_DAYS_COVER_WITH_READY_GOODS"
+        else:
+            route_class = "HOLD"
+            rule = "SUFFICIENT_COVER_OR_NO_ACTIONABLE_DEMAND"
+
+        route["routeClass"] = route_class
+        route["routeRule"] = rule
+        routes.append(route)
+
+    return routes
+
+
+def build_replenishment_recommendations(
+    routes: list[dict],
+    *,
+    target_days_cover: int = 14,
+) -> list[dict]:
+    recommendations = []
+    for row in routes:
+        if row["routeClass"] != "REPLENISH":
+            continue
+
+        target_stock = float(row["avgDailyDemand"]) * target_days_cover
+        quantity = max(
+            0.0,
+            target_stock
+            - float(row["available"])
+            - float(row["confirmedInbound"]),
+        )
+        recommendations.append(
+            {
+                "decisionClass": "REPLENISH",
+                "sku": row["sku"],
+                "regionId": row["regionId"],
+                "recommendedQty": quantity,
+                "targetDaysCover": target_days_cover,
+                "reason": {
+                    "rule": row["routeRule"],
+                    "daysCover": row["daysCover"],
+                    "demandScore": row["demandScore"],
+                },
+                "authorityState": "RECOMMENDED_ONLY",
+                "evidenceRefs": sorted(set(row["evidenceRefs"])),
+            }
+        )
+
+    return sorted(
+        recommendations,
+        key=lambda item: (item["regionId"], item["sku"]),
     )
