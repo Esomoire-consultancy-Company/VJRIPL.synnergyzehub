@@ -6,6 +6,27 @@ R0.4 is the first Estate slice that permits a bounded external effect, but only 
 
 R0.4 must prove the full control loop before any Logic ERP, Easycom, Myntra, Flipkart, Centro, warehouse, factory, payment, or production credential is introduced.
 
+## Dependency, thread binding, and supersession
+
+This design continues [Estate strategy methodology](https://chatgpt.com/c/6a9ea5e3-5ddc-83ee-9b20-0a9d117fc1b7). The conversation is provenance; the versioned doctrine and explicit user authorization govern the work. This is the next slice of the existing Estate work, not a separate lineage.
+
+Canonical release lineage: `R0.1 -> R0.2 -> R0.3 -> R0.4`.
+
+| Slice | Canonical doctrine | Branch and PR | Inherited contract |
+| --- | --- | --- | --- |
+| R0.1 | [ESTATE-VOI-R0.1](../../ESTATE-VOI-R0.1.md) | `estate-voi-r0-1-possibility-contract`, [PR #6](https://github.com/Esomoire-consultancy-Company/VJRIPL.synnergyzehub/pull/6), based on `main` | Canonical identities, six qualification gates, acceptance evidence, outcome evidence before Reality |
+| R0.2 | [ESTATE-VOI-R0.2](../../ESTATE-VOI-R0.2.md) | `estate-voi-r0-2-registry`, [PR #7](https://github.com/Esomoire-consultancy-Company/VJRIPL.synnergyzehub/pull/7), based on R0.1 | Alpha persistence, capability ledger, commercial controls, advisory Estate-local reservations |
+| R0.3 | [ESTATE-VOI-R0.3](../../ESTATE-VOI-R0.3.md) | `estate-voi-r0-3-governed-transitions`, [PR #9](https://github.com/Esomoire-consultancy-Company/VJRIPL.synnergyzehub/pull/9), based on R0.2 | Evidence-bound Proposition/Deal records and governed execution intent with `NO_EXTERNAL_EFFECT` |
+| R0.4 | This controlled-effects design | `estate-voi-r0-4-controlled-effects`, based on R0.3 / PR #9 | Separate sandbox effect lifecycle linked to the existing execution intent |
+
+R0.4 depends on PR #9. Its PR must target `estate-voi-r0-3-governed-transitions` and remain draft and unmerged. The R0.3 base at this binding is `d01dc3b2d039fb9b665aa5b669885ed298e4290d`; the original R0.4 design commit is `c87cc06`. Review only the R0.4 delta against R0.3. Do not retarget to `main`, flatten the stack, or merge any slice as part of this binding. Future changes to the stack require deliberate reconciliation with the predecessor.
+
+R0.4 supersedes only the deferred sandbox execution design in R0.3's next-slice roadmap. It does not supersede the R0.1-R0.3 doctrine, their records, or their operational authority boundaries. R0.3's live Warden/River, real-provider admission, service-principal and secrets-isolation productionization gates remain open for future production promotion; local sandbox contracts do not satisfy those production gates.
+
+The canonical record lineage remains `EST-POS -> EST-PROP -> EST-DEAL -> EST-EXEC (NO_EXTERNAL_EFFECT)`. Every R0.4 `EST-EFFECT-*` links to that persisted `EST-EXEC-*` through `execution_intent_id`; acknowledgements, observations, reconciliation and failures preserve the effect/intent linkage. R0.4 must not rewrite the source execution intent's `effect_state` or relax R0.3's database constraint. Effect states belong to the separate runtime tables. Existing evidence-bundle, acceptance, Warden/River reference and intent-idempotency lineage remains intact.
+
+An intent is not an effect, a stored reference is not live authority validation, and a River receipt is evidence rather than authorization. `RECONCILED` establishes the sandbox effect result only; `EST-REAL` still requires observed commercial outcome evidence under the inherited doctrine. This documentation binding does not enable a runtime or authorize production effects.
+
 ## Architectural decision
 
 Use a separate `estate_effect_runtime.py` module rather than continuing to grow `estate_registry.py`.
