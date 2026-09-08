@@ -64,6 +64,21 @@ def _finite_non_negative(value, field: str) -> float:
     return number
 
 
+def _canonical_json(payload: dict) -> str:
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def _sha256_id(payload: dict) -> str:
+    return "sha256:" + hashlib.sha256(
+        _canonical_json(payload).encode("utf-8")
+    ).hexdigest()
+
+
 def validate_inventory_bundle(bundle: dict) -> dict:
     if not isinstance(bundle, dict) or bundle.get("contract") != EVIDENCE_CONTRACT:
         raise CommercialIntelligenceValidationError(
@@ -78,6 +93,25 @@ def validate_inventory_bundle(bundle: dict) -> dict:
     if not isinstance(bundle_id, str) or not bundle_id.startswith("sha256:"):
         raise CommercialIntelligenceValidationError(
             "bundleId must be a sha256 digest"
+        )
+
+    integrity = bundle.get("integrity")
+    if not isinstance(integrity, dict):
+        raise CommercialIntelligenceValidationError("integrity is required")
+    if integrity.get("algorithm") != "SHA-256":
+        raise CommercialIntelligenceValidationError(
+            "integrity algorithm must be SHA-256"
+        )
+
+    canonical_payload = _canonical_json(payload)
+    expected_digest = "sha256:" + hashlib.sha256(
+        canonical_payload.encode("utf-8")
+    ).hexdigest()
+    if bundle_id != expected_digest or integrity.get("digest") != expected_digest:
+        raise CommercialIntelligenceValidationError("integrity digest mismatch")
+    if integrity.get("canonicalPayload") != canonical_payload:
+        raise CommercialIntelligenceValidationError(
+            "integrity canonical payload mismatch"
         )
 
     _parse_datetime(payload.get("observedAt"), "payload.observedAt")
@@ -434,21 +468,6 @@ def detect_assortment_risks(
         )
     )
     return risks, capability
-
-
-def _canonical_json(payload: dict) -> str:
-    return json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
-
-
-def _sha256_id(payload: dict) -> str:
-    return "sha256:" + hashlib.sha256(
-        _canonical_json(payload).encode("utf-8")
-    ).hexdigest()
 
 
 def build_recommendation_ledger(
