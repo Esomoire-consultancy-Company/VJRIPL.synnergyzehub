@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "repl-nix-workspace"
 version = "0.1.0"
-description = "VOI buying-house portal and read-only Warden evidence bridge"
+description = "VOI buying-house portal, Estate commercial layer, and read-only Warden evidence bridge"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=2.2.4",
@@ -20,4 +20,7 @@ py-modules = [
     "voi_evidence_adapter",
     "export_voi_inventory_evidence",
     "inventory_evidence_bridge",
+    "estate_contract",
+    "estate_registry",
+    "estate_board",
 ]

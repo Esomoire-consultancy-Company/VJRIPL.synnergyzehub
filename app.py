@@ -10,6 +10,7 @@ from order_confirmation import show_order_confirmation
 from merchandiser_agent import show_merchandiser_agent
 from retailer_analysis import show_retailer_analysis
 from inventory_evidence_bridge import show_inventory_evidence_bridge
+from estate_board import show_estate_board
 
 # Configure the page
 st.set_page_config(
@@ -55,6 +56,11 @@ with st.sidebar:
         if st.session_state.cart:
             if st.button("🛒 View Order", use_container_width=True):
                 st.session_state.page = 'order_booking'
+
+        st.markdown("### Estate")
+        if st.button("🏗️ Estate Board", use_container_width=True):
+            st.session_state.page = 'estate_board'
+        st.caption("VOI Client 001: possibilities, capability composition and commercial guardrails.")
         
         # Market Intelligence Section
         st.markdown("### Market Intelligence")
@@ -133,6 +139,8 @@ elif st.session_state.page == 'retailer_analysis':
     show_retailer_analysis()
 elif st.session_state.page == 'inventory_evidence_bridge':
     show_inventory_evidence_bridge()
+elif st.session_state.page == 'estate_board':
+    show_estate_board()
 
 # Footer
 st.markdown("---")

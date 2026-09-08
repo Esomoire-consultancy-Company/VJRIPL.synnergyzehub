@@ -32,16 +32,19 @@ jobs:
       - name: Install all locked project packages
         run: uv sync --locked
 
-      - name: Compile bridge modules
+      - name: Compile governed modules
         run: |
           uv run python -m py_compile \
             voi_evidence_adapter.py \
             export_voi_inventory_evidence.py \
             inventory_evidence_bridge.py \
+            estate_contract.py \
+            estate_registry.py \
+            estate_board.py \
             app.py
 
-      - name: Run evidence contract regression suite
+      - name: Run evidence and Estate contract regression suite
         run: uv run python -m unittest discover -s tests -p 'test_*.py' -v
 
-      - name: Prove direct test entrypoint
+      - name: Prove direct evidence test entrypoint
         run: uv run python tests/test_voi_evidence_adapter.py
