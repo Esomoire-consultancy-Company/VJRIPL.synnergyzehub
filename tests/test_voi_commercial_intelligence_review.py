@@ -15,45 +15,49 @@ from voi_commercial_intelligence import (
 )
 
 
-def _sealed_bundle() -> dict:
-    payload = {
-        "observedAt": "2026-09-08T04:30:00Z",
-        "demandWindowDays": 14,
-        "sources": [],
-        "warnings": [],
-        "snapshots": [
-            {
-                "sku": "VOI-BLUE-32",
-                "available": 20.0,
-                "avgDailyDemand": 4.0,
-                "confirmedInbound": 0.0,
-                "leadTimeDays": 7,
-                "unitCost": 500.0,
-                "campaignUpliftPct": 0.0,
-                "observedAt": "2026-09-08T04:30:00Z",
-                "evidenceRefs": ["evidence:voi-export:inventory:abc"],
-            }
-        ],
-    }
+def _reseal(bundle: dict) -> dict:
     canonical = json.dumps(
-        payload,
+        bundle["payload"],
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
     )
     digest = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    return {
+    bundle["integrity"] = {
+        "algorithm": "SHA-256",
+        "digest": digest,
+        "canonicalPayload": canonical,
+    }
+    bundle["bundleId"] = digest
+    return bundle
+
+
+def _sealed_bundle() -> dict:
+    bundle = {
         "schemaVersion": "1.0.0",
         "contract": "VOI-INVENTORY-EVIDENCE-001",
         "sourceMode": "READ_ONLY_EXPORT",
-        "payload": payload,
-        "integrity": {
-            "algorithm": "SHA-256",
-            "digest": digest,
-            "canonicalPayload": canonical,
+        "payload": {
+            "observedAt": "2026-09-08T04:30:00Z",
+            "demandWindowDays": 14,
+            "sources": [],
+            "warnings": [],
+            "snapshots": [
+                {
+                    "sku": "VOI-BLUE-32",
+                    "available": 20.0,
+                    "avgDailyDemand": 4.0,
+                    "confirmedInbound": 0.0,
+                    "leadTimeDays": 7,
+                    "unitCost": 500.0,
+                    "campaignUpliftPct": 0.0,
+                    "observedAt": "2026-09-08T04:30:00Z",
+                    "evidenceRefs": ["evidence:voi-export:inventory:abc"],
+                }
+            ],
         },
-        "bundleId": digest,
     }
+    return _reseal(bundle)
 
 
 class ReviewRegressionTests(unittest.TestCase):
@@ -67,6 +71,17 @@ class ReviewRegressionTests(unittest.TestCase):
             "integrity digest mismatch",
         ):
             validate_inventory_bundle(tampered)
+
+    def test_rejects_fractional_lead_time_days(self):
+        bundle = _sealed_bundle()
+        bundle["payload"]["snapshots"][0]["leadTimeDays"] = 1.9
+        _reseal(bundle)
+
+        with self.assertRaisesRegex(
+            CommercialIntelligenceValidationError,
+            "leadTimeDays must be an integer",
+        ):
+            validate_inventory_bundle(bundle)
 
 
 if __name__ == "__main__":
