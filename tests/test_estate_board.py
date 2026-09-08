@@ -1,8 +1,8 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from estate_board import build_board_summary, channel_template
-from estate_registry import PossibilityRecord
+from estate_board import build_board_summary, build_governance_summary, channel_template
+from estate_registry import DealRecord, ExecutionIntentRecord, PossibilityRecord, PropositionRecord
 
 
 class EstateBoardTests(unittest.TestCase):
@@ -59,6 +59,42 @@ class EstateBoardTests(unittest.TestCase):
         self.assertEqual(summary.estimated_value, 1_500_000)
         self.assertEqual(summary.estimated_contribution, 250_000)
         self.assertEqual(summary.expired_count, 1)
+
+    def test_governance_summary_counts_chain_and_no_external_effect(self):
+        propositions = [
+            PropositionRecord(
+                proposition_id="EST-PROP-000301",
+                possibility_id="EST-POS-000301",
+                partner="Myntra",
+                success_criteria="Positive contribution",
+                evidence_bundle_id="sha256:abc",
+            )
+        ]
+        deals = [
+            DealRecord(
+                deal_id="EST-DEAL-000301",
+                proposition_id="EST-PROP-000301",
+                acceptance_evidence_ref="river://acceptance/301",
+                warden_decision_ref="warden://decision/301",
+                river_receipt_ref="river://transition/301",
+            )
+        ]
+        intents = [
+            ExecutionIntentRecord(
+                execution_intent_id="EST-EXEC-000301",
+                deal_id="EST-DEAL-000301",
+                warden_decision_ref="warden://decision/exec-301",
+                river_receipt_ref="river://intent/301",
+                idempotency_key="estate-exec-301",
+            )
+        ]
+
+        summary = build_governance_summary(propositions, deals, intents)
+
+        self.assertEqual(summary.proposition_count, 1)
+        self.assertEqual(summary.deal_count, 1)
+        self.assertEqual(summary.execution_intent_count, 1)
+        self.assertTrue(summary.all_intents_no_external_effect)
 
 
 if __name__ == "__main__":
