@@ -40,7 +40,15 @@ class CommercialIntelligenceValidationError(ValueError):
 
 
 def _parse_datetime(value: str, field: str) -> datetime:
-    text = (value or "").strip().replace("Z", "+00:00")
+    if not isinstance(value, str):
+        raise CommercialIntelligenceValidationError(
+            f"{field} must be an ISO-8601 string"
+        )
+    text = value.strip().replace("Z", "+00:00")
+    if not text:
+        raise CommercialIntelligenceValidationError(
+            f"{field} must be an ISO-8601 string"
+        )
     try:
         parsed = datetime.fromisoformat(text)
     except ValueError as exc:
@@ -80,12 +88,17 @@ def _positive_integer(value, field: str) -> int:
 
 
 def _canonical_json(payload: dict) -> str:
-    return json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
+    try:
+        return json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise CommercialIntelligenceValidationError(
+            "payload must be canonical JSON serializable"
+        ) from exc
 
 
 def _sha256_id(payload: dict) -> str:
@@ -149,7 +162,11 @@ def validate_inventory_bundle(bundle: dict) -> dict:
                 f"{', '.join(sorted(missing))}"
             )
 
-        sku = str(snapshot["sku"]).strip()
+        if not isinstance(snapshot["sku"], str):
+            raise CommercialIntelligenceValidationError(
+                f"snapshot[{index}].sku must be a string"
+            )
+        sku = snapshot["sku"].strip()
         if not sku or sku in seen:
             raise CommercialIntelligenceValidationError(
                 f"duplicate or blank snapshot sku: {sku}"
@@ -166,11 +183,16 @@ def validate_inventory_bundle(bundle: dict) -> dict:
             _finite_non_negative(snapshot[field], f"snapshot[{sku}].{field}")
 
         _positive_integer(snapshot["leadTimeDays"], f"snapshot[{sku}].leadTimeDays")
-
         _parse_datetime(snapshot["observedAt"], f"snapshot[{sku}].observedAt")
-        if not isinstance(snapshot["evidenceRefs"], list):
+
+        evidence_refs = snapshot["evidenceRefs"]
+        if not isinstance(evidence_refs, list):
             raise CommercialIntelligenceValidationError(
                 f"snapshot[{sku}].evidenceRefs must be a list"
+            )
+        if not all(isinstance(ref, str) for ref in evidence_refs):
+            raise CommercialIntelligenceValidationError(
+                f"snapshot[{sku}].evidenceRefs must contain strings"
             )
 
     return bundle
@@ -306,9 +328,11 @@ def build_demand_matrix(
         if regional_mode:
             effective_demand = raw / window
             demand_basis = "REGIONAL_SIGNAL_EQUIVALENT_DAILY_RATE"
+            stock_scope = "SHARED_AGGREGATE"
         else:
             effective_demand = baseline_demand
             demand_basis = "BUNDLE_AVG_DAILY_DEMAND"
+            stock_scope = "AGGREGATE_UNSCOPED"
 
         rows.append(
             {
@@ -321,6 +345,7 @@ def build_demand_matrix(
                 "baselineAvgDailyDemand": baseline_demand,
                 "effectiveDailyDemand": effective_demand,
                 "demandBasis": demand_basis,
+                "stockScope": stock_scope,
                 "avgDailyDemand": effective_demand,
                 "leadTimeDays": int(snapshot["leadTimeDays"]),
                 "daysCover": _days_cover_for_demand(snapshot, effective_demand),
@@ -335,10 +360,7 @@ def route_ready_goods(
     *,
     target_days_cover: int = 14,
 ) -> list[dict]:
-    if target_days_cover <= 0:
-        raise CommercialIntelligenceValidationError(
-            "target_days_cover must be positive"
-        )
+    target_days_cover = _positive_integer(target_days_cover, "target_days_cover")
 
     routes = []
     for row in demand_matrix:
@@ -376,6 +398,7 @@ def build_replenishment_recommendations(
     *,
     target_days_cover: int = 14,
 ) -> list[dict]:
+    target_days_cover = _positive_integer(target_days_cover, "target_days_cover")
     recommendations = []
     for row in routes:
         if row["routeClass"] != "REPLENISH":
@@ -384,13 +407,20 @@ def build_replenishment_recommendations(
         effective_demand = float(
             row.get("effectiveDailyDemand", row.get("avgDailyDemand", 0.0))
         )
-        target_stock = effective_demand * target_days_cover
-        quantity = max(
-            0.0,
-            target_stock
-            - float(row["available"])
-            - float(row["confirmedInbound"]),
-        )
+        demand_basis = row.get("demandBasis", "LEGACY_AVG_DAILY_DEMAND")
+        if demand_basis == "REGIONAL_SIGNAL_EQUIVALENT_DAILY_RATE":
+            quantity = None
+            quantity_state = "UNQUANTIFIED_SHARED_STOCK"
+        else:
+            target_stock = effective_demand * target_days_cover
+            quantity = max(
+                0.0,
+                target_stock
+                - float(row["available"])
+                - float(row["confirmedInbound"]),
+            )
+            quantity_state = "QUANTIFIED_AGGREGATE_STOCK"
+
         recommendations.append(
             {
                 "modelVersion": MODEL_VERSION,
@@ -398,12 +428,13 @@ def build_replenishment_recommendations(
                 "sku": row["sku"],
                 "regionId": row["regionId"],
                 "recommendedQty": quantity,
+                "quantityState": quantity_state,
                 "targetDaysCover": target_days_cover,
                 "reason": {
                     "rule": row["routeRule"],
                     "daysCover": row["daysCover"],
                     "demandScore": row["demandScore"],
-                    "demandBasis": row.get("demandBasis", "LEGACY_AVG_DAILY_DEMAND"),
+                    "demandBasis": demand_basis,
                     "effectiveDailyDemand": effective_demand,
                 },
                 "authorityState": "RECOMMENDED_ONLY",
@@ -423,10 +454,7 @@ def detect_assortment_risks(
     slow_stock_days: int = 45,
 ) -> tuple[list[dict], dict]:
     validate_inventory_bundle(inventory_bundle)
-    if slow_stock_days <= 0:
-        raise CommercialIntelligenceValidationError(
-            "slow_stock_days must be positive"
-        )
+    slow_stock_days = _positive_integer(slow_stock_days, "slow_stock_days")
 
     snapshots = inventory_bundle["payload"]["snapshots"]
     risks = []
@@ -518,15 +546,25 @@ def build_recommendation_ledger(
 
     with_ids = []
     for recommendation in recommendations:
+        if not isinstance(recommendation, dict):
+            raise CommercialIntelligenceValidationError(
+                "recommendations must contain objects"
+            )
+        clean_recommendation = {
+            key: value
+            for key, value in recommendation.items()
+            if key != "recommendationId"
+        }
         business_payload = {
             "modelVersion": model_version,
             "sourceBundleId": source_bundle_id,
-            "recommendation": recommendation,
+            "recommendation": clean_recommendation,
         }
+        computed_id = _sha256_id(business_payload)
         with_ids.append(
             {
-                "recommendationId": _sha256_id(business_payload),
-                **recommendation,
+                **clean_recommendation,
+                "recommendationId": computed_id,
             }
         )
 
