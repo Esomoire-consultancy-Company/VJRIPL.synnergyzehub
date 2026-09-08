@@ -8,7 +8,10 @@ if str(ROOT) not in sys.path:
 
 from voi_commercial_intelligence import (
     CommercialIntelligenceValidationError,
+    build_demand_matrix,
+    build_replenishment_recommendations,
     normalize_demand_signals,
+    route_ready_goods,
     validate_inventory_bundle,
 )
 
@@ -146,6 +149,97 @@ class CommercialIntelligenceTests(unittest.TestCase):
                 ],
                 inventory_bundle=self._bundle(),
             )
+
+    def test_builds_unscoped_demand_matrix_without_regional_signals(self):
+        matrix = build_demand_matrix(self._bundle())
+        self.assertEqual({row["regionId"] for row in matrix}, {"UNSCOPED"})
+        blue = next(row for row in matrix if row["sku"] == "VOI-BLUE-32")
+        black = next(row for row in matrix if row["sku"] == "VOI-BLACK-34")
+        self.assertEqual(blue["rawIntent"], 56.0)
+        self.assertEqual(blue["demandScore"], 100.0)
+        self.assertEqual(black["rawIntent"], 14.0)
+        self.assertEqual(black["demandScore"], 25.0)
+        self.assertEqual(blue["daysCover"], 5.0)
+
+    def test_scales_regional_demand_scores_deterministically(self):
+        signals = normalize_demand_signals(
+            [
+                {
+                    "sku": "VOI-BLUE-32",
+                    "region_id": "BLR-NORTH",
+                    "signal_type": "PRODUCT_VIEW",
+                    "signal_value": "100",
+                    "observed_at": "2026-09-08T04:00:00Z",
+                },
+                {
+                    "sku": "VOI-BLUE-32",
+                    "region_id": "BLR-NORTH",
+                    "signal_type": "PURCHASE",
+                    "signal_value": "10",
+                    "observed_at": "2026-09-08T04:00:00Z",
+                },
+                {
+                    "sku": "VOI-BLACK-34",
+                    "region_id": "BLR-NORTH",
+                    "signal_type": "PURCHASE",
+                    "signal_value": "5",
+                    "observed_at": "2026-09-08T04:00:00Z",
+                },
+            ],
+            inventory_bundle=self._bundle(),
+        )
+        matrix = build_demand_matrix(self._bundle(), signals)
+        blue = next(row for row in matrix if row["sku"] == "VOI-BLUE-32")
+        black = next(row for row in matrix if row["sku"] == "VOI-BLACK-34")
+        self.assertEqual(blue["rawIntent"], 15.0)
+        self.assertEqual(blue["demandScore"], 100.0)
+        self.assertAlmostEqual(black["demandScore"], 33.33333333333333)
+
+    def test_zero_demand_has_null_days_cover(self):
+        bundle = self._bundle()
+        bundle["payload"]["snapshots"][0]["avgDailyDemand"] = 0.0
+        matrix = build_demand_matrix(bundle)
+        blue = next(row for row in matrix if row["sku"] == "VOI-BLUE-32")
+        self.assertIsNone(blue["daysCover"])
+
+    def test_routes_low_cover_ready_goods_to_replenish(self):
+        matrix = build_demand_matrix(self._bundle())
+        routes = route_ready_goods(matrix, target_days_cover=14)
+        blue = next(row for row in routes if row["sku"] == "VOI-BLUE-32")
+        self.assertEqual(blue["routeClass"], "REPLENISH")
+        self.assertEqual(blue["routeRule"], "LOW_DAYS_COVER_WITH_READY_GOODS")
+
+    def test_routes_zero_stock_demand_to_investigate(self):
+        bundle = self._bundle()
+        bundle["payload"]["snapshots"][0]["available"] = 0.0
+        bundle["payload"]["snapshots"][0]["confirmedInbound"] = 0.0
+        routes = route_ready_goods(build_demand_matrix(bundle))
+        blue = next(row for row in routes if row["sku"] == "VOI-BLUE-32")
+        self.assertEqual(blue["routeClass"], "INVESTIGATE")
+        self.assertEqual(
+            blue["routeRule"],
+            "DEMAND_WITHOUT_READY_OR_INBOUND_STOCK",
+        )
+
+    def test_builds_replenishment_quantity_without_claiming_authority(self):
+        routes = route_ready_goods(
+            build_demand_matrix(self._bundle()),
+            target_days_cover=14,
+        )
+        recommendations = build_replenishment_recommendations(
+            routes,
+            target_days_cover=14,
+        )
+        blue = next(
+            item for item in recommendations if item["sku"] == "VOI-BLUE-32"
+        )
+        self.assertEqual(blue["recommendedQty"], 36.0)
+        self.assertEqual(blue["authorityState"], "RECOMMENDED_ONLY")
+        self.assertEqual(blue["decisionClass"], "REPLENISH")
+        self.assertEqual(
+            blue["evidenceRefs"],
+            ["evidence:voi-export:inventory:abc"],
+        )
 
 
 if __name__ == "__main__":
