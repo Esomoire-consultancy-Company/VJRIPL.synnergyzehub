@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -87,18 +88,56 @@ class ReservationRequest:
     ends_at: datetime
 
 
+@dataclass(frozen=True)
+class EvidenceBundleRecord:
+    bundle_id: str
+    contract: str
+    source_mode: str
+    integrity_digest: str
+    observed_at: str | None
+
+
+@dataclass(frozen=True)
+class PropositionRecord:
+    proposition_id: str
+    possibility_id: str
+    partner: str
+    success_criteria: str
+    evidence_bundle_id: str
+
+
+@dataclass(frozen=True)
+class DealRecord:
+    deal_id: str
+    proposition_id: str
+    acceptance_evidence_ref: str
+    warden_decision_ref: str
+    river_receipt_ref: str
+
+
+@dataclass(frozen=True)
+class ExecutionIntentRecord:
+    execution_intent_id: str
+    deal_id: str
+    warden_decision_ref: str
+    river_receipt_ref: str
+    idempotency_key: str
+    effect_state: str = "NO_EXTERNAL_EFFECT"
+
+
 class EstateRegistry:
     """Alpha/local Estate registry.
 
-    This repository stores Estate-local planning records only. It does not
-    reserve or mutate operational state in ERP, OMS, marketplace, warehouse,
-    or factory systems.
+    This repository stores Estate-local planning and governance records only.
+    It does not reserve or mutate operational state in ERP, OMS, marketplace,
+    warehouse, or factory systems.
     """
 
     def __init__(self, db_path: str | Path):
         self.db_path = str(db_path)
         self._conn = sqlite3.connect(self.db_path)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA foreign_keys = ON")
         self._initialize_schema()
 
     def close(self) -> None:
@@ -142,10 +181,54 @@ class EstateRegistry:
                 ends_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS evidence_bundles (
+                bundle_id TEXT PRIMARY KEY,
+                contract TEXT NOT NULL,
+                source_mode TEXT NOT NULL,
+                integrity_digest TEXT NOT NULL,
+                observed_at TEXT,
+                payload_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS propositions (
+                proposition_id TEXT PRIMARY KEY,
+                possibility_id TEXT NOT NULL,
+                partner TEXT NOT NULL,
+                success_criteria TEXT NOT NULL,
+                evidence_bundle_id TEXT NOT NULL,
+                FOREIGN KEY(possibility_id) REFERENCES possibilities(possibility_id),
+                FOREIGN KEY(evidence_bundle_id) REFERENCES evidence_bundles(bundle_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS deals (
+                deal_id TEXT PRIMARY KEY,
+                proposition_id TEXT NOT NULL,
+                acceptance_evidence_ref TEXT NOT NULL,
+                warden_decision_ref TEXT NOT NULL,
+                river_receipt_ref TEXT NOT NULL,
+                FOREIGN KEY(proposition_id) REFERENCES propositions(proposition_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS execution_intents (
+                execution_intent_id TEXT PRIMARY KEY,
+                deal_id TEXT NOT NULL,
+                warden_decision_ref TEXT NOT NULL,
+                river_receipt_ref TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                effect_state TEXT NOT NULL CHECK(effect_state = 'NO_EXTERNAL_EFFECT'),
+                FOREIGN KEY(deal_id) REFERENCES deals(deal_id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_reservations_resource_window
                 ON reservations(resource_id, starts_at, ends_at);
             CREATE INDEX IF NOT EXISTS idx_possibilities_expiry
                 ON possibilities(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_propositions_possibility
+                ON propositions(possibility_id);
+            CREATE INDEX IF NOT EXISTS idx_deals_proposition
+                ON deals(proposition_id);
+            CREATE INDEX IF NOT EXISTS idx_execution_intents_deal
+                ON execution_intents(deal_id);
             """
         )
         self._conn.commit()
@@ -305,6 +388,228 @@ class EstateRegistry:
             for row in rows
         ]
 
+    def register_inventory_evidence_bundle(self, bundle: dict) -> EvidenceBundleRecord:
+        contract = bundle.get("contract")
+        source_mode = bundle.get("sourceMode")
+        if contract != "VOI-INVENTORY-EVIDENCE-001":
+            raise ValueError("Unsupported evidence contract")
+        if source_mode != "READ_ONLY_EXPORT":
+            raise ValueError("Unsupported evidence source mode")
+
+        integrity = bundle.get("integrity") or {}
+        if integrity.get("algorithm") != "SHA-256":
+            raise ValueError("Evidence integrity algorithm must be SHA-256")
+        payload = bundle.get("payload")
+        if not isinstance(payload, dict):
+            raise ValueError("Evidence payload is required")
+
+        canonical_payload = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        expected_digest = f"sha256:{hashlib.sha256(canonical_payload.encode('utf-8')).hexdigest()}"
+        if integrity.get("canonicalPayload") != canonical_payload:
+            raise ValueError("Evidence integrity canonical payload mismatch")
+        if integrity.get("digest") != expected_digest:
+            raise ValueError("Evidence integrity digest mismatch")
+        if bundle.get("bundleId") != expected_digest:
+            raise ValueError("Evidence integrity bundle ID mismatch")
+
+        record = EvidenceBundleRecord(
+            bundle_id=expected_digest,
+            contract=contract,
+            source_mode=source_mode,
+            integrity_digest=expected_digest,
+            observed_at=payload.get("observedAt"),
+        )
+        self._conn.execute(
+            """
+            INSERT INTO evidence_bundles (
+                bundle_id, contract, source_mode, integrity_digest, observed_at, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(bundle_id) DO NOTHING
+            """,
+            (
+                record.bundle_id,
+                record.contract,
+                record.source_mode,
+                record.integrity_digest,
+                record.observed_at,
+                canonical_payload,
+            ),
+        )
+        self._conn.commit()
+        return record
+
+    def create_proposition(self, proposition: PropositionRecord) -> PropositionRecord:
+        possibility = self.get_possibility(proposition.possibility_id)
+        if possibility is None:
+            raise ValueError("Proposition requires a persisted possibility")
+        if possibility.state != "QUALIFIED":
+            raise ValueError("Proposition requires a QUALIFIED possibility")
+        evidence = self._conn.execute(
+            "SELECT bundle_id FROM evidence_bundles WHERE bundle_id = ?",
+            (proposition.evidence_bundle_id,),
+        ).fetchone()
+        if evidence is None:
+            raise ValueError("Proposition requires a registered evidence bundle")
+        if not proposition.partner.strip() or not proposition.success_criteria.strip():
+            raise ValueError("Proposition partner and success criteria are required")
+
+        self._conn.execute(
+            """
+            INSERT INTO propositions (
+                proposition_id, possibility_id, partner, success_criteria, evidence_bundle_id
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                proposition.proposition_id,
+                proposition.possibility_id,
+                proposition.partner,
+                proposition.success_criteria,
+                proposition.evidence_bundle_id,
+            ),
+        )
+        self._conn.execute(
+            "UPDATE possibilities SET state = 'PROPOSITION' WHERE possibility_id = ?",
+            (proposition.possibility_id,),
+        )
+        self._conn.commit()
+        return proposition
+
+    def get_proposition(self, proposition_id: str) -> PropositionRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM propositions WHERE proposition_id = ?",
+            (proposition_id,),
+        ).fetchone()
+        return self._proposition_from_row(row) if row else None
+
+    def list_propositions(self) -> list[PropositionRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM propositions ORDER BY proposition_id"
+        ).fetchall()
+        return [self._proposition_from_row(row) for row in rows]
+
+    def accept_deal(self, deal: DealRecord) -> DealRecord:
+        proposition = self.get_proposition(deal.proposition_id)
+        if proposition is None:
+            raise ValueError("Deal requires a persisted proposition")
+        if not deal.acceptance_evidence_ref.strip():
+            raise ValueError("Commercial acceptance evidence is required")
+        if not deal.warden_decision_ref.strip():
+            raise ValueError("Warden decision reference is required")
+        if not deal.river_receipt_ref.strip():
+            raise ValueError("River receipt reference is required")
+
+        self._conn.execute(
+            """
+            INSERT INTO deals (
+                deal_id, proposition_id, acceptance_evidence_ref,
+                warden_decision_ref, river_receipt_ref
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                deal.deal_id,
+                deal.proposition_id,
+                deal.acceptance_evidence_ref,
+                deal.warden_decision_ref,
+                deal.river_receipt_ref,
+            ),
+        )
+        self._conn.execute(
+            """
+            UPDATE possibilities SET state = 'DEAL'
+            WHERE possibility_id = (
+                SELECT possibility_id FROM propositions WHERE proposition_id = ?
+            )
+            """,
+            (deal.proposition_id,),
+        )
+        self._conn.commit()
+        return deal
+
+    def get_deal(self, deal_id: str) -> DealRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM deals WHERE deal_id = ?",
+            (deal_id,),
+        ).fetchone()
+        return self._deal_from_row(row) if row else None
+
+    def list_deals(self) -> list[DealRecord]:
+        rows = self._conn.execute("SELECT * FROM deals ORDER BY deal_id").fetchall()
+        return [self._deal_from_row(row) for row in rows]
+
+    def create_execution_intent(
+        self,
+        intent: ExecutionIntentRecord,
+    ) -> ExecutionIntentRecord:
+        deal = self.get_deal(intent.deal_id)
+        if deal is None:
+            raise ValueError("Execution intent requires a persisted Deal")
+        if not intent.warden_decision_ref.strip():
+            raise ValueError("Warden decision reference is required")
+        if not intent.river_receipt_ref.strip():
+            raise ValueError("River receipt reference is required")
+        if not intent.idempotency_key.strip():
+            raise ValueError("Execution intent requires an idempotency key")
+        if intent.effect_state != "NO_EXTERNAL_EFFECT":
+            raise ValueError("Execution intent must remain NO_EXTERNAL_EFFECT in R0.3")
+
+        try:
+            self._conn.execute(
+                """
+                INSERT INTO execution_intents (
+                    execution_intent_id, deal_id, warden_decision_ref,
+                    river_receipt_ref, idempotency_key, effect_state
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    intent.execution_intent_id,
+                    intent.deal_id,
+                    intent.warden_decision_ref,
+                    intent.river_receipt_ref,
+                    intent.idempotency_key,
+                    intent.effect_state,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            if "idempotency_key" in str(exc):
+                raise ValueError("Execution intent idempotency key already exists") from exc
+            raise
+
+        self._conn.execute(
+            """
+            UPDATE possibilities SET state = 'EXECUTION_INTENT'
+            WHERE possibility_id = (
+                SELECT p.possibility_id
+                FROM propositions p
+                JOIN deals d ON d.proposition_id = p.proposition_id
+                WHERE d.deal_id = ?
+            )
+            """,
+            (intent.deal_id,),
+        )
+        self._conn.commit()
+        return intent
+
+    def get_execution_intent(
+        self,
+        execution_intent_id: str,
+    ) -> ExecutionIntentRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM execution_intents WHERE execution_intent_id = ?",
+            (execution_intent_id,),
+        ).fetchone()
+        return self._execution_intent_from_row(row) if row else None
+
+    def list_execution_intents(self) -> list[ExecutionIntentRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM execution_intents ORDER BY execution_intent_id"
+        ).fetchall()
+        return [self._execution_intent_from_row(row) for row in rows]
+
     @staticmethod
     def _capability_from_row(row: sqlite3.Row) -> CapabilityRecord:
         return CapabilityRecord(
@@ -337,6 +642,37 @@ class EstateRegistry:
                 if row["expires_at"] is not None
                 else None
             ),
+        )
+
+    @staticmethod
+    def _proposition_from_row(row: sqlite3.Row) -> PropositionRecord:
+        return PropositionRecord(
+            proposition_id=row["proposition_id"],
+            possibility_id=row["possibility_id"],
+            partner=row["partner"],
+            success_criteria=row["success_criteria"],
+            evidence_bundle_id=row["evidence_bundle_id"],
+        )
+
+    @staticmethod
+    def _deal_from_row(row: sqlite3.Row) -> DealRecord:
+        return DealRecord(
+            deal_id=row["deal_id"],
+            proposition_id=row["proposition_id"],
+            acceptance_evidence_ref=row["acceptance_evidence_ref"],
+            warden_decision_ref=row["warden_decision_ref"],
+            river_receipt_ref=row["river_receipt_ref"],
+        )
+
+    @staticmethod
+    def _execution_intent_from_row(row: sqlite3.Row) -> ExecutionIntentRecord:
+        return ExecutionIntentRecord(
+            execution_intent_id=row["execution_intent_id"],
+            deal_id=row["deal_id"],
+            warden_decision_ref=row["warden_decision_ref"],
+            river_receipt_ref=row["river_receipt_ref"],
+            idempotency_key=row["idempotency_key"],
+            effect_state=row["effect_state"],
         )
 
 
