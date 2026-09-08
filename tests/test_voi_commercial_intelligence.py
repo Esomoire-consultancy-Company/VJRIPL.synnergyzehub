@@ -1,4 +1,6 @@
 import copy
+import hashlib
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -21,17 +23,27 @@ from voi_commercial_intelligence import (
 
 
 class CommercialIntelligenceTests(unittest.TestCase):
+    def _seal(self, bundle: dict) -> dict:
+        canonical = json.dumps(
+            bundle["payload"],
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        digest = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        bundle["bundleId"] = digest
+        bundle["integrity"] = {
+            "algorithm": "SHA-256",
+            "digest": digest,
+            "canonicalPayload": canonical,
+        }
+        return bundle
+
     def _bundle(self) -> dict:
-        return {
+        bundle = {
             "schemaVersion": "1.0.0",
             "contract": "VOI-INVENTORY-EVIDENCE-001",
             "sourceMode": "READ_ONLY_EXPORT",
-            "bundleId": "sha256:" + "a" * 64,
-            "integrity": {
-                "algorithm": "SHA-256",
-                "digest": "sha256:" + "a" * 64,
-                "canonicalPayload": "{}",
-            },
             "payload": {
                 "observedAt": "2026-09-08T04:30:00Z",
                 "demandWindowDays": 14,
@@ -63,6 +75,7 @@ class CommercialIntelligenceTests(unittest.TestCase):
                 ],
             },
         }
+        return self._seal(bundle)
 
     def test_rejects_wrong_evidence_contract(self):
         bundle = self._bundle()
@@ -202,6 +215,7 @@ class CommercialIntelligenceTests(unittest.TestCase):
     def test_zero_demand_has_null_days_cover(self):
         bundle = self._bundle()
         bundle["payload"]["snapshots"][0]["avgDailyDemand"] = 0.0
+        self._seal(bundle)
         matrix = build_demand_matrix(bundle)
         blue = next(row for row in matrix if row["sku"] == "VOI-BLUE-32")
         self.assertIsNone(blue["daysCover"])
@@ -217,6 +231,7 @@ class CommercialIntelligenceTests(unittest.TestCase):
         bundle = self._bundle()
         bundle["payload"]["snapshots"][0]["available"] = 0.0
         bundle["payload"]["snapshots"][0]["confirmedInbound"] = 0.0
+        self._seal(bundle)
         routes = route_ready_goods(build_demand_matrix(bundle))
         blue = next(row for row in routes if row["sku"] == "VOI-BLUE-32")
         self.assertEqual(blue["routeClass"], "INVESTIGATE")
@@ -248,6 +263,7 @@ class CommercialIntelligenceTests(unittest.TestCase):
     def test_detects_zero_demand_stock_as_slow_stock(self):
         bundle = self._bundle()
         bundle["payload"]["snapshots"][0]["avgDailyDemand"] = 0.0
+        self._seal(bundle)
         risks, capability = detect_assortment_risks(bundle)
         blue = next(item for item in risks if item["sku"] == "VOI-BLUE-32")
         self.assertEqual(blue["riskType"], "SLOW_STOCK")
@@ -290,6 +306,7 @@ class CommercialIntelligenceTests(unittest.TestCase):
                 "available": 12.0,
             },
         ]
+        self._seal(bundle)
         risks, capability = detect_assortment_risks(bundle)
         broken = next(item for item in risks if item["riskType"] == "BROKEN_SIZE")
         self.assertEqual(broken["styleId"], "STYLE-1")
