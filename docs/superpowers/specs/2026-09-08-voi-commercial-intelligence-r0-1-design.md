@@ -1,43 +1,38 @@
 # VOI Commercial Intelligence R0.1 — Design
 
 Date: 2026-09-08
-Status: Design approved for specification; implementation pending spec review
+Status: Implemented in draft PR #8; verified contract
 Repository: `Esomoire-consultancy-Company/VJRIPL.synnergyzehub`
 Target branch: `feat/voi-commercial-intelligence-r0-1`
+Model version: `VOI-CI-R0.1`
 
 ## 1. Purpose
 
-Add the first governed commercial-intelligence layer above the existing read-only VOI inventory evidence bridge. R0.1 converts validated evidence into deterministic recommendations and outcome-ready ledger records. It does not write to LOGIC ERP, Easycom, marketplaces, inventory, pricing, orders, or payments.
+VOI Commercial Intelligence R0.1 is the first governed recommendation layer above the existing read-only `VOI-INVENTORY-EVIDENCE-001` contract. It turns validated inventory/sales evidence and optional regional demand signals into deterministic demand, routing, replenishment, assortment-risk, and recommendation-ledger records.
 
-The initial release implements six bounded capabilities:
+R0.1 is recommendation-only. It does not write to LOGIC ERP, Easycom, marketplaces, inventory, pricing, orders, payments, BNR, or ARK state.
+
+The release contains six bounded capabilities:
 
 - CI-001 Demand Signal Normalizer
 - CI-002 SKU × Region Demand Matrix
 - CI-003 Ready Goods Router
 - CI-004 Store Replenishment Recommendation
 - CI-005 Broken Size / Slow Stock Detection
-- CI-006 Recommendation → Outcome Ledger
+- CI-006 Recommendation Ledger
 
-## 2. Existing substrate
-
-The repository already contains `VOI-INVENTORY-EVIDENCE-001`, implemented by `voi_evidence_adapter.py`, plus a Streamlit ingestion surface in `inventory_evidence_bridge.py` and regression coverage in `tests/test_voi_evidence_adapter.py`.
-
-That contract remains authoritative and unchanged. R0.1 consumes its validated output rather than duplicating ERP/OMS parsing.
-
-## 3. Architectural boundary
-
-The flow is:
+## 2. Architectural boundary
 
 ```text
 LOGIC / OMS exports
       ↓
 VOI-INVENTORY-EVIDENCE-001
-      ↓
+      ↓  cryptographic integrity verification
 Commercial Intelligence R0.1
       ↓
 Recommendation object
       ↓
-Warden / operator approval boundary
+Warden / operator authorization boundary
       ↓
 Future execution adapter (out of scope)
       ↓
@@ -46,85 +41,80 @@ Outcome observation
 
 Rules:
 
-1. Evidence is input, not authority to execute.
-2. Commercial Intelligence emits recommendations only.
-3. No R0.1 function may call external commerce systems or mutate operational inventory.
-4. Every recommendation carries source evidence references and a model version.
-5. Recommendation IDs are deterministic digests of canonical recommendation payloads.
-6. All heuristics are explicit and versioned; no hidden stochastic behavior is permitted in R0.1.
+1. Evidence is input, never execution authority.
+2. The commercial-intelligence module performs no external I/O.
+3. Every recommendation is `RECOMMENDED_ONLY` and carries source evidence references and `modelVersion`.
+4. Recommendation and ledger identifiers are deterministic SHA-256 digests of canonical business payloads.
+5. Identical valid inputs produce identical canonical outputs; wall-clock generation time is excluded.
+6. Missing geography is represented as `UNSCOPED`; missing style/size lineage is represented explicitly rather than guessed.
 
-## 4. Considered approaches
+## 3. Components
 
-### A. Extend the existing evidence adapter directly
+### 3.1 `voi_commercial_intelligence.py`
 
-Pros: fewer files.
+Pure Python business-contract module. No Streamlit dependency and no external network, database, subprocess, or commerce-client I/O.
 
-Cons: mixes evidence normalization and commercial inference, weakens the read-only evidence boundary, and makes future model changes harder to audit.
-
-Rejected.
-
-### B. Create a separate commercial-intelligence module consuming evidence bundles
-
-Pros: preserves the existing contract, isolates inference logic, supports deterministic testing, and allows the recommendation engine to evolve independently.
-
-Selected.
-
-### C. Build a new service/API immediately
-
-Pros: clean deployment boundary.
-
-Cons: unnecessary operational surface before the business rules are proven; introduces authentication, persistence, and deployment concerns prematurely.
-
-Deferred until after R0.1 proves the decision contracts.
-
-## 5. Components
-
-### 5.1 `voi_commercial_intelligence.py`
-
-Pure Python module with no Streamlit dependency and no external I/O. It owns validation, scoring, routing, recommendation construction, and canonical ledger serialization.
-
-Public functions:
+Verified public functions:
 
 ```python
-normalize_demand_signals(rows, *, observed_at) -> list[dict]
-build_demand_matrix(inventory_bundle, demand_signals=None) -> list[dict]
-route_ready_goods(demand_matrix, *, target_days_cover=14) -> list[dict]
-build_replenishment_recommendations(routes, inventory_bundle) -> list[dict]
-detect_assortment_risks(inventory_bundle, *, slow_stock_days=45) -> list[dict]
-build_recommendation_ledger(recommendations, *, model_version) -> dict
+validate_inventory_bundle(bundle: dict) -> dict
+normalize_demand_signals(
+    rows: list[dict[str, str]],
+    *,
+    inventory_bundle: dict,
+) -> list[dict]
+build_demand_matrix(
+    inventory_bundle: dict,
+    demand_signals: list[dict] | None = None,
+) -> list[dict]
+route_ready_goods(
+    demand_matrix: list[dict],
+    *,
+    target_days_cover: int = 14,
+) -> list[dict]
+build_replenishment_recommendations(
+    routes: list[dict],
+    *,
+    target_days_cover: int = 14,
+) -> list[dict]
+detect_assortment_risks(
+    inventory_bundle: dict,
+    *,
+    slow_stock_days: int = 45,
+) -> tuple[list[dict], dict]
+build_recommendation_ledger(
+    inventory_bundle: dict,
+    recommendations: list[dict],
+    risks: list[dict],
+    capability_state: dict,
+    *,
+    model_version: str = MODEL_VERSION,
+) -> dict
 ```
 
-Function names may be adjusted for existing repository naming conventions, but responsibilities must remain separated.
+### 3.2 `commercial_intelligence_bridge.py`
 
-### 5.2 `commercial_intelligence_bridge.py`
+Read-only Streamlit surface. It can consume the last validated evidence bundle from session state or a user-uploaded evidence JSON, optionally ingest a regional demand-signal CSV, display the derived outputs, and export the deterministic recommendation ledger JSON.
 
-Streamlit read-only surface. It:
+The bridge exposes no operational action control.
 
-- consumes the last validated inventory evidence bundle from session state or accepts a validated bundle JSON upload;
-- accepts an optional demand-signal CSV;
-- displays SKU/region demand, ready-goods routes, replenishment recommendations, and assortment risks;
-- exports a canonical recommendation ledger JSON;
-- explicitly states that export does not authorize execution.
+### 3.3 `inventory_evidence_bridge.py`
 
-### 5.3 `inventory_evidence_bridge.py`
+After successful evidence construction and validation, the exact bundle is retained at:
 
-Small additive change only: after a bundle validates, retain it in `st.session_state.voi_inventory_evidence_bundle` so the intelligence page can consume the exact validated object without re-parsing source CSVs.
+```python
+st.session_state.voi_inventory_evidence_bundle
+```
 
-### 5.4 `app.py`
+Failed or partial evidence is not retained.
 
-Add a `Commercial Intelligence` navigation item and route. No other application flow changes are required.
+### 3.4 `app.py`
 
-### 5.5 Tests
+Adds a `Commercial Intelligence` navigation entry under Market Intelligence. Existing portal flows remain unchanged.
 
-Add `tests/test_voi_commercial_intelligence.py` using the repository's existing `unittest` style.
+## 4. Inventory evidence contract and integrity verification
 
-## 6. Input contracts
-
-### 6.1 Inventory evidence
-
-Input must satisfy the existing `VOI-INVENTORY-EVIDENCE-001` shape. The commercial module must reject malformed or unrecognized contracts instead of silently interpreting them.
-
-Required snapshot fields used in R0.1:
+Input must be `VOI-INVENTORY-EVIDENCE-001` and must contain a non-empty snapshot array. Required snapshot fields are:
 
 - `sku`
 - `available`
@@ -136,15 +126,33 @@ Required snapshot fields used in R0.1:
 - `observedAt`
 - `evidenceRefs`
 
-### 6.2 Optional demand signals
+Before any recommendation logic is allowed to run, the commercial-intelligence module recomputes the canonical JSON of `payload` and its SHA-256 digest. Acceptance requires all of the following to agree:
 
-CSV columns:
+```text
+bundle.bundleId
+bundle.integrity.digest
+SHA-256(canonical_json(bundle.payload))
+```
+
+Additionally:
+
+- `integrity.algorithm` must equal `SHA-256`;
+- `integrity.canonicalPayload` must exactly equal the recomputed canonical payload;
+- malformed snapshot entries are rejected with `CommercialIntelligenceValidationError`;
+- numeric evidence must be finite and non-negative where applicable;
+- `leadTimeDays` must be a finite positive integer and is never silently truncated.
+
+A `sha256:` prefix alone is not evidence of integrity.
+
+## 5. CI-001 — Demand Signal Normalizer
+
+Optional demand-signal CSV columns:
 
 ```text
 sku,region_id,signal_type,signal_value,observed_at
 ```
 
-Allowed R0.1 signal types:
+Allowed types:
 
 - `PRODUCT_VIEW`
 - `ADD_TO_CART`
@@ -154,17 +162,15 @@ Allowed R0.1 signal types:
 
 Validation rules:
 
-- SKU must exist in the inventory evidence bundle.
-- `region_id` is required and non-empty.
+- SKU must exist in the validated evidence bundle.
+- `region_id` is mandatory.
 - `signal_value` must be finite and non-negative.
-- `observed_at` must be ISO-8601 and may not be after the inventory evidence observation time.
-- Unknown signal types are rejected.
+- `observed_at` must be ISO-8601 and not later than the evidence observation time.
+- unknown signal types are rejected.
+- CSV input must decode as UTF-8.
+- extra CSV fields are rejected.
 
-If no regional signals are provided, the engine creates a single `UNSCOPED` region from existing inventory/sales evidence. This preserves usefulness without inventing geographic precision.
-
-## 7. CI-001 — Demand Signal Normalizer
-
-Normalized signal object:
+Normalized object:
 
 ```json
 {
@@ -172,17 +178,15 @@ Normalized signal object:
   "regionId": "BLR-NORTH",
   "signalType": "PURCHASE",
   "signalValue": 8.0,
-  "observedAt": "2026-09-08T04:30:00Z"
+  "observedAt": "2026-09-08T04:00:00Z"
 }
 ```
 
-The normalizer must be deterministic and preserve no unvalidated source fields.
+## 6. CI-002 — SKU × Region Demand Matrix
 
-## 8. CI-002 — SKU × Region Demand Matrix
+R0.1 uses a transparent deterministic heuristic, not a predictive ML model.
 
-R0.1 is a transparent heuristic baseline, not a predictive ML model.
-
-For explicit regional signals, calculate a raw intent score:
+For explicit regional signals:
 
 ```text
 raw_intent =
@@ -193,62 +197,78 @@ raw_intent =
 - 1.00 × RETURN
 ```
 
-Clamp the raw score at zero.
+The result is clamped to zero.
 
-Within each region, scale positive raw scores to a `0..100` `demandScore` using the largest raw score in that region. If every score is zero, all demand scores are zero.
+Within each region, `demandScore` is scaled to `0..100` against the largest positive raw intent in that region.
 
-For `UNSCOPED`, derive `raw_intent` from `avgDailyDemand × demandWindowDays` and scale across SKUs in the same way.
+### 6.1 Regional effective demand
 
-Each matrix row also carries:
-
-- `available`
-- `confirmedInbound`
-- `avgDailyDemand`
-- `leadTimeDays`
-- `daysCover`
-- `evidenceRefs`
-
-`daysCover` is:
+Regional routing must not leak the bundle-wide historical demand of a SKU into every region. Therefore, when regional signals are supplied:
 
 ```text
-(available + confirmedInbound) / avgDailyDemand
+effectiveDailyDemand = max(raw_intent, 0) / demandWindowDays
 ```
 
-When demand is zero, `daysCover` is represented as `null`, not infinity.
+Rows with no signal-derived intent in that region receive `effectiveDailyDemand = 0`, even if the SKU has positive global historical demand.
 
-## 9. CI-003 — Ready Goods Router
+The matrix records both:
 
-The router classifies each SKU/region row without executing movement.
+- `baselineAvgDailyDemand` — the evidence-bundle historical rate;
+- `effectiveDailyDemand` — the rate actually used by regional routing;
+- `demandBasis` — `REGIONAL_SIGNAL_EQUIVALENT_DAILY_RATE` or `BUNDLE_AVG_DAILY_DEMAND`.
 
-R0.1 route classes:
+`avgDailyDemand` remains as a compatibility alias for `effectiveDailyDemand` in matrix rows.
+
+### 6.2 UNSCOPED mode
+
+When no regional signals are supplied, the engine creates the single `UNSCOPED` region:
+
+```text
+raw_intent = baselineAvgDailyDemand × demandWindowDays
+effectiveDailyDemand = baselineAvgDailyDemand
+demandBasis = BUNDLE_AVG_DAILY_DEMAND
+```
+
+### 6.3 Days cover
+
+```text
+daysCover = (available + confirmedInbound) / effectiveDailyDemand
+```
+
+If effective demand is zero, `daysCover` is `null` rather than infinity.
+
+## 7. CI-003 — Ready Goods Router
+
+Route classes:
 
 - `REPLENISH`
 - `HOLD`
 - `INVESTIGATE`
 
-Rules:
+Rules, in order:
 
-1. `REPLENISH` when `avgDailyDemand > 0`, `daysCover < target_days_cover`, and `available > 0`.
-2. `INVESTIGATE` when demand exists but `available + confirmedInbound == 0`.
-3. `HOLD` otherwise.
+1. `INVESTIGATE` when `effectiveDailyDemand > 0` and `available + confirmedInbound == 0`.
+2. `REPLENISH` when `effectiveDailyDemand > 0` and `daysCover < target_days_cover`.
+   - `LOW_DAYS_COVER_WITH_READY_GOODS` when `available > 0`.
+   - `LOW_DAYS_COVER_WITH_INBOUND_ONLY` when `available == 0` and confirmed inbound stock is positive.
+3. `HOLD` otherwise, with `SUFFICIENT_COVER_OR_NO_ACTIONABLE_DEMAND`.
 
-The router records the rule that fired so operators can audit why a recommendation exists.
+The router classifies only; it never moves stock.
 
-## 10. CI-004 — Store Replenishment Recommendation
+## 8. CI-004 — Replenishment Recommendation
 
-For `REPLENISH` rows, calculate a target quantity:
+For `REPLENISH` rows:
 
 ```text
-target_stock = avgDailyDemand × target_days_cover
+target_stock = effectiveDailyDemand × target_days_cover
 recommended_qty = max(0, target_stock - available - confirmedInbound)
 ```
 
-The R0.1 recommendation is advisory. It does not infer a source warehouse or execute a transfer because the current evidence contract does not contain location-level source stock.
-
-Recommendation object:
+Each standalone recommendation is self-describing:
 
 ```json
 {
+  "modelVersion": "VOI-CI-R0.1",
   "decisionClass": "REPLENISH",
   "sku": "VOI-SKU-001",
   "regionId": "BLR-NORTH",
@@ -257,37 +277,47 @@ Recommendation object:
   "reason": {
     "rule": "LOW_DAYS_COVER_WITH_READY_GOODS",
     "daysCover": 4.3,
-    "demandScore": 91.0
+    "demandScore": 91.0,
+    "demandBasis": "REGIONAL_SIGNAL_EQUIVALENT_DAILY_RATE",
+    "effectiveDailyDemand": 2.0
   },
   "authorityState": "RECOMMENDED_ONLY",
-  "evidenceRefs": []
+  "evidenceRefs": ["evidence:..."]
 }
 ```
 
-No recommendation is represented as approved, authorized, or executed.
+No recommendation is approved, authorized, or executed by this module.
 
-## 11. CI-005 — Broken Size / Slow Stock Detection
+## 9. CI-005 — Assortment risks
 
-### Slow stock
+### 9.1 Slow stock
 
-A SKU is `SLOW_STOCK` when:
+Slow-stock detection uses the evidence-bundle historical demand baseline. A SKU is `SLOW_STOCK` when available stock is positive and either:
 
-- available stock is positive; and
-- `avgDailyDemand == 0`, or calculated stock cover exceeds `slow_stock_days`.
+- baseline `avgDailyDemand == 0`; or
+- historical days cover exceeds `slow_stock_days`.
 
-### Broken size
+### 9.2 Broken size
 
-Broken-size detection requires style/size lineage that the current evidence contract does not provide. R0.1 therefore supports broken-size detection only when optional snapshot fields `styleId` and `size` are present in a future/additive evidence bundle. The commercial module must not infer style families from SKU strings.
+Broken-size detection is enabled only when every relevant snapshot contains explicit `styleId` and `size` lineage. The engine never derives style families from SKU text.
 
-When those fields are absent, the detector returns no broken-size finding and records capability state `INSUFFICIENT_STYLE_SIZE_EVIDENCE` in the intelligence summary.
+Without explicit lineage:
 
-This keeps R0.1 truthful rather than fabricating assortment relationships.
+```text
+capabilityState.brokenSizeDetection = INSUFFICIENT_STYLE_SIZE_EVIDENCE
+```
 
-## 12. CI-006 — Recommendation → Outcome Ledger
+With explicit lineage, missing sizes are identified only from those supplied fields.
 
-Ledger contract: `VOI-COMMERCIAL-INTELLIGENCE-001`.
+## 10. CI-006 — Recommendation ledger
 
-Top-level fields:
+Contract:
+
+```text
+VOI-COMMERCIAL-INTELLIGENCE-001
+```
+
+Top-level shape:
 
 ```json
 {
@@ -302,84 +332,97 @@ Top-level fields:
   "integrity": {
     "algorithm": "SHA-256",
     "digest": "sha256:..."
-  }
+  },
+  "ledgerId": "sha256:..."
 }
 ```
 
-`evidenceObservedAt` comes from the source evidence bundle. R0.1 deliberately excludes wall-clock generation time from the canonical ledger so identical inputs produce identical outputs.
+Each recommendation receives `recommendationId = SHA-256(canonical business payload + sourceBundleId + modelVersion)`.
 
-Each recommendation receives a deterministic `recommendationId` calculated from its canonical business payload plus `sourceBundleId` and `modelVersion`.
+`ledgerId` is the SHA-256 digest of the complete canonical ledger business payload. Wall-clock generation time is excluded, making the result byte-stable for identical inputs.
 
-Outcome fields are initially absent or `null`. A later observer may append a separate outcome record referencing `recommendationId`; R0.1 must not mutate the original recommendation into a claim of success.
+Outcome observation is a later additive record referencing `recommendationId`; R0.1 does not mutate recommendations into claims of successful execution.
 
-## 13. Error handling
+## 11. Error contract
 
-Introduce `CommercialIntelligenceValidationError` for contract and signal failures.
+All commercial-intelligence validation failures use:
 
-Reject:
+```python
+CommercialIntelligenceValidationError(ValueError)
+```
+
+The module rejects, among other cases:
 
 - wrong evidence contract;
-- malformed evidence bundle;
-- non-finite numeric values;
-- negative stock or signals;
-- demand signals after evidence observation time;
-- unknown SKUs;
-- unknown signal types;
-- duplicate or contradictory source keys where deterministic aggregation is not possible.
+- evidence digest/canonical-payload mismatch;
+- malformed or non-object snapshots;
+- non-finite or negative numeric values where forbidden;
+- fractional, zero, negative, or malformed `leadTimeDays`;
+- future-dated demand signals;
+- unknown SKUs or signal types;
+- non-UTF-8 demand-signal CSV uploads.
 
-No exception path may trigger operational side effects.
+No error path performs an operational side effect.
 
-## 14. UI behavior
+## 12. UI behavior
 
-The Commercial Intelligence page shows four primary sections:
+The Commercial Intelligence page displays:
 
 1. Demand Matrix
 2. Ready Goods Routes
 3. Replenishment Recommendations
 4. Assortment Risks
+5. Deterministic intelligence contract / ledger export
 
-A fifth section exposes bundle identity, source evidence references, model version, and downloadable JSON.
-
-Every page includes a visible boundary notice:
+Boundary notice:
 
 > Recommendations are advisory only. Warden/operator authorization is required before any inventory, pricing, order, or marketplace action.
 
-## 15. Test strategy
+## 13. Verification strategy
 
-Minimum tests:
+The regression suite covers:
 
-1. rejects wrong evidence contract;
-2. produces deterministic intelligence ledger IDs;
-3. normalizes valid regional signals;
-4. rejects future-dated signals;
-5. rejects unknown signal types;
-6. rejects unknown SKU signals;
-7. builds UNSCOPED demand matrix without regional signals;
-8. scales regional demand scores deterministically;
-9. returns null days cover for zero demand;
-10. routes low-cover ready goods to REPLENISH;
-11. routes zero-stock demand to INVESTIGATE;
-12. builds replenishment quantity without claiming authorization;
-13. detects zero-demand stock as SLOW_STOCK;
-14. does not infer broken sizes without style/size evidence;
-15. detects broken sizes when explicit style/size evidence is present;
-16. preserves source evidence references in recommendation records;
-17. commercial intelligence module performs no external I/O;
-18. existing 12 evidence-adapter regression tests continue to pass.
+- evidence contract validation and cryptographic tamper rejection;
+- strict integer validation for lead time;
+- malformed snapshot rejection;
+- signal normalization and UTF-8 handling;
+- regional demand scoring and global-demand leakage prevention;
+- UNSCOPED demand fallback;
+- zero-demand days-cover behavior;
+- ready-stock and inbound-only replenishment routing;
+- zero-stock investigation routing;
+- self-describing recommendation records;
+- slow-stock and explicit-lineage broken-size detection;
+- deterministic recommendation and ledger IDs;
+- no external-I/O imports in the core engine;
+- existing evidence-adapter regression tests.
 
-## 16. Acceptance criteria
+GitHub Actions additionally verifies:
 
-R0.1 is acceptable when:
+```text
+uv lock --check
+uv sync --locked
+python -m py_compile (all governed modules)
+unittest discovery
+direct evidence-adapter tests
+direct commercial-intelligence tests
+```
 
-- the existing evidence contract and tests remain green;
-- all new intelligence tests pass;
-- the complete canonical intelligence output is deterministic for identical evidence and signals;
+## 14. Acceptance criteria
+
+R0.1 is acceptable for review when:
+
+- cryptographic evidence integrity is verified before inference;
+- existing evidence tests remain green;
+- all commercial-intelligence and review-regression tests pass;
+- regional signal routing uses only regional effective demand and does not leak global demand;
+- inbound-only low-cover stock cannot be mislabeled sufficient-cover `HOLD`;
+- every recommendation is evidence-linked, model-versioned, and `RECOMMENDED_ONLY`;
+- canonical recommendation and ledger outputs are deterministic;
 - no operational write integration exists;
-- the UI can consume a validated evidence bundle and export a recommendation ledger;
-- every recommendation is evidence-linked and `RECOMMENDED_ONLY`;
-- absent regional or style/size evidence is represented explicitly rather than guessed.
+- absent region or style/size evidence is represented explicitly.
 
-## 17. Out of scope
+## 15. Out of scope
 
 - automatic Warden approval;
 - direct LOGIC ERP or Easycom writes;
@@ -392,4 +435,4 @@ R0.1 is acceptable when:
 - persistent database storage;
 - BNR/ARK membership mutation.
 
-Those become later releases after R0.1 establishes trustworthy evidence → recommendation → outcome contracts.
+Those remain later releases after R0.1 establishes the governed evidence → recommendation → outcome contract.
