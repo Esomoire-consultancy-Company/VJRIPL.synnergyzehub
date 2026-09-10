@@ -1,0 +1,93 @@
+schema_version: "1.0.0"
+matter:
+  matter_id: "MAT-VJRIPL-001"
+  canonical_name: "VJRIPL / VOI Synnergyze Hub"
+  repository: "Esomoire-consultancy-Company/VJRIPL.synnergyzehub"
+  status: "ACTIVE"
+  matter_type: "CLIENT_PRODUCT_AND_COMMERCIAL_ENGINEERING"
+  intended_beneficiary:
+    entity: "VJRIPL / VOI Jeans"
+    benefit_rule: "Receive the attributable benefit of work performed for this Matter without implicit transfer, contamination, or prejudice to unrelated Matters."
+  legal_effect_notice: "This manifest is an engineering/governance classification record. Repository placement or classification does not by itself determine legal title, licence scope, confidentiality, employment ownership, assignment, or other legal rights."
+
+scope:
+  includes:
+    - "VOI-specific product, buying-house, inventory, commercial-intelligence and Estate engineering"
+    - "VOI-specific configurations, schemas, mappings, tests, evidence contracts and business workflows"
+    - "Matter evidence, decisions, proposed dispositions and accepted dispositions"
+  excludes_without_explicit_admission:
+    - "unrelated client matters"
+    - "unrelated disputes or legal matters"
+    - "general-purpose Synnergyze, Genesis, DigitalMe, Warden, RiverOS or SILK platform rights"
+    - "third-party rights beyond their applicable licence or permission"
+
+repository_semantics:
+  repository: "MATTER"
+  issue: "MATTER_ISSUE"
+  branch: "WORKING_POSITION"
+  commit: "MATTER_RECORD"
+  pull_request: "PROPOSED_DISPOSITION"
+  merge: "ACCEPTED_DISPOSITION"
+  tag: "MATTER_CHECKPOINT"
+  release: "PUBLISHED_MATTER_STATE"
+  action_artifact: "PROCEDURAL_EVIDENCE"
+
+ip_classes:
+  - id: "VOI_FOREGROUND"
+    meaning: "Work specifically attributable to this Matter for VOI/VJRIPL, subject to the governing contracts and applicable law."
+  - id: "VOI_DATA_KNOWLEDGE"
+    meaning: "VOI/VJRIPL-provided or VOI/VJRIPL-specific operational, commercial, product, inventory or derived business information."
+  - id: "SYNNERGYZE_BACKGROUND"
+    meaning: "Reusable platform architecture, engines, protocols, patterns or tooling not uniquely attributable to this Matter."
+  - id: "THIRD_PARTY_PROTOTYPE"
+    meaning: "Third-party, research, sample, demonstrator, mock, imported or externally licensed material."
+  - id: "UNCLASSIFIED_LEGACY"
+    meaning: "Legacy repository material awaiting provenance and IP classification; not presumed to be VOI foreground IP."
+
+system_boundaries:
+  operational_truth:
+    logic_erp: "transactional enterprise truth"
+    easycom: "OMS/channel execution capability"
+    marketplace_systems: "channel truth"
+    warehouse_and_factory_systems: "physical execution truth"
+  orchestration_rule: "Matter components may consume evidence and coordinate governed decisions but must not invent operational authority or state."
+
+lineage:
+  preserve_existing_estate_stack: true
+  existing_stack:
+    - "R0.1"
+    - "R0.2"
+    - "R0.3"
+    - "R0.4"
+  mutation_rule: "Additive by default. Supersession requires an explicit source, target, scope, effective date, authority, and evidence record."
+
+cross_matter_import:
+  implicit_imports_allowed: false
+  required_fields:
+    - "source_matter_id"
+    - "source_object_or_commit"
+    - "imported_object"
+    - "rights_basis"
+    - "purpose"
+    - "receiving_matter_id"
+    - "approving_authority"
+    - "effective_date"
+  rule: "Reuse across Matters must be explicit, attributable, reviewable, and must not silently transfer client data, confidential information, authority, obligations, or ownership assertions."
+
+issue_governance:
+  canonical_matter_id: "MAT-VJRIPL-001"
+  minimum_fields:
+    - "issue_class"
+    - "beneficiary"
+    - "question_problem_or_decision"
+    - "evidence"
+    - "ip_class"
+    - "cross_matter_dependency"
+    - "authority"
+    - "acceptance_criteria"
+
+review_policy:
+  production_authority_separate_from_merge: true
+  evidence_separate_from_authorization: true
+  client_benefit_must_be_stated: true
+  cross_matter_dependencies_must_be_stated: true
