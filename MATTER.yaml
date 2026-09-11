@@ -1,4 +1,4 @@
-schema_version: "1.0.0"
+schema_version: "1.1.0"
 matter:
   matter_id: "MAT-VJRIPL-001"
   canonical_name: "VJRIPL / VOI Synnergyze Hub"
@@ -74,6 +74,38 @@ cross_matter_import:
     - "effective_date"
   rule: "Reuse across Matters must be explicit, attributable, reviewable, and must not silently transfer client data, confidential information, authority, obligations, or ownership assertions."
 
+publication_policy:
+  policy_document: "docs/PUBLICATION_CONFIDENTIALITY_POLICY.md"
+  observed_repository_visibility_at_review: "PUBLIC"
+  observed_repository_wide_license_at_review: "NONE_DECLARED"
+  historical_public_exposure_recorded: true
+  prospective_working_posture: "RESTRICTED_WORKING_MATTER"
+  public_release_route: "PUBLIC_QUALIFIED_PROJECTION"
+  default_artifact_publication_state: "REVIEW_REQUIRED"
+  repository_wide_license_granted_by_manifest: false
+  unresolved_legacy_future_publication_state: "RESTRICTED"
+  settings_change_authorized_by_manifest: false
+  rules:
+    - "Public repository visibility does not by itself qualify an artifact for publication or determine IP ownership, confidentiality, licence scope, or production authority."
+    - "VOI_DATA_KNOWLEDGE is restricted by default and requires separate data/publication authority before public release."
+    - "UNCLASSIFIED_LEGACY material is restricted from new intentional publication until source, rights basis and sensitivity are reviewed."
+    - "Private contractual, authority, credential, personal-data or security evidence must not be copied into public governance records merely to prove review."
+    - "A future visibility, licence, redaction, history-rewrite, takedown or publication action requires a separately reviewed disposition and competent authority."
+  public_release_minimum_fields:
+    - "matter_id"
+    - "artifact_or_release_id"
+    - "exact_version_or_commit"
+    - "public_purpose"
+    - "ip_or_provenance_class"
+    - "data_review"
+    - "third_party_review"
+    - "security_review"
+    - "contractual_confidentiality_review"
+    - "approving_authority"
+    - "effective_date"
+    - "license_or_no_license_notice"
+    - "evidence_reference"
+
 issue_governance:
   canonical_matter_id: "MAT-VJRIPL-001"
   minimum_fields:
@@ -91,3 +123,5 @@ review_policy:
   evidence_separate_from_authorization: true
   client_benefit_must_be_stated: true
   cross_matter_dependencies_must_be_stated: true
+  publication_authority_separate_from_repository_visibility: true
+  private_evidence_not_republished_for_review: true
