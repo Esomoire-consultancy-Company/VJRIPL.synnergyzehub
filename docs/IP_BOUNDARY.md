@@ -83,11 +83,28 @@ The following are strong candidates for `VOI_FOREGROUND` or mixed `VOI_FOREGROUN
 
 Where a generalized mechanism is reusable beyond VOI, classify the generalized mechanism separately from the VOI configuration or implementation.
 
+## Component-level disposition — Issue #17
+
+`docs/COMPONENT_IP_REGISTER.md` is the canonical component/subcomponent engineering classification for the initial governed stack.
+
+The register applies these boundaries:
+
+- **evidence engine vs VOI evidence profile/data** — generic validation/canonicalization/fingerprinting/sealing may qualify as reusable background, while `VOI-INVENTORY-EVIDENCE-001`, LOGIC/OMS field mappings, VOI evidence refs and evidence instances remain Matter-specific;
+- **recommendation engine vs VOI commercial policy/data** — deterministic transforms/ledger mechanics may be reusable, while VOI signal weights, routing rules, shared-stock protections, model/contract identity and client evidence/signals remain Matter-specific;
+- **Estate substrate vs VJRIPL configuration/records** — generic lifecycle, registry, idempotency and Warden/River/effect-control primitives may be reusable, while VOI Client 001, capability seeds, channel templates, evidence-contract admission and client records remain Matter-specific;
+- **governance schema vs client manifest** — Matter/provenance/publication patterns may be reusable, while MAT-VJRIPL-001 identifiers, beneficiary rules, benefit records, operational truth boundaries and publication posture remain client-specific.
+
+The register is an engineering/provenance map only. It does not establish legal ownership or authorize extraction, assignment, licensing, open-source publication, repository transfer or cross-Matter reuse.
+
+Any future extraction of `SYNNERGYZE_BACKGROUND` candidates must remove `VOI_DATA_KNOWLEDGE`, parameterize client policy/configuration, verify third-party terms, establish a rights basis and create an explicit cross-Matter export record before code is moved or reused.
+
 ## Mixed-artifact rule
 
 A file or PR may contain more than one class. When practical, separate classes into distinct modules, data files or commits. When separation is not practical, record all affected classes in the PR and identify the boundary explicitly.
 
 `app.py` is the current legacy example: a generic prototype shell contains a later VOI-specific evidence-bridge route. The bounded VOI addition does not retroactively convert the whole shell into `VOI_FOREGROUND`, and the legacy shell does not downgrade the governed VOI evidence capability.
+
+The same rule applies inside current governed modules: a reusable function or control mechanism does not make its embedded VOI contract constants, policy weights, channel mappings, client IDs or client data reusable by default.
 
 ## No contamination by naming
 
@@ -112,3 +129,5 @@ Before exporting or reusing Matter material elsewhere, determine:
 Prefer reusable interfaces or generalized background components rather than copying VOI-specific data or client logic into another Matter.
 
 For `UNCLASSIFIED_LEGACY` / `LEGACY_UNKNOWN` binaries, archives, images or documents, cross-Matter export is blocked by default until provenance and rights review is evidenced.
+
+For mixed governed components, cross-Matter reuse must follow the component register's separation recommendation rather than copying the whole source file by convenience.
