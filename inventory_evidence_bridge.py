@@ -96,6 +96,7 @@ def show_inventory_evidence_bridge():
         st.error(f"Evidence bundle rejected: {exc}")
         return
 
+    st.session_state.voi_inventory_evidence_bundle = bundle
     payload = bundle["payload"]
     st.success("Evidence bundle validated and integrity-sealed.")
 

@@ -1,0 +1,592 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from datetime import datetime, timezone
+
+
+MODEL_VERSION = "VOI-CI-R0.1"
+EVIDENCE_CONTRACT = "VOI-INVENTORY-EVIDENCE-001"
+ALLOWED_SIGNAL_TYPES = {
+    "PRODUCT_VIEW",
+    "ADD_TO_CART",
+    "PURCHASE",
+    "RETURN",
+    "STOCKOUT",
+}
+SIGNAL_WEIGHTS = {
+    "PRODUCT_VIEW": 0.05,
+    "ADD_TO_CART": 0.25,
+    "PURCHASE": 1.0,
+    "RETURN": -1.0,
+    "STOCKOUT": 0.5,
+}
+REQUIRED_SNAPSHOT_FIELDS = {
+    "sku",
+    "available",
+    "avgDailyDemand",
+    "confirmedInbound",
+    "leadTimeDays",
+    "unitCost",
+    "campaignUpliftPct",
+    "observedAt",
+    "evidenceRefs",
+}
+
+
+class CommercialIntelligenceValidationError(ValueError):
+    pass
+
+
+def _parse_datetime(value: str, field: str) -> datetime:
+    if not isinstance(value, str):
+        raise CommercialIntelligenceValidationError(
+            f"{field} must be an ISO-8601 string"
+        )
+    text = value.strip().replace("Z", "+00:00")
+    if not text:
+        raise CommercialIntelligenceValidationError(
+            f"{field} must be an ISO-8601 string"
+        )
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise CommercialIntelligenceValidationError(
+            f"{field} must be ISO-8601: {value}"
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _finite_non_negative(value, field: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise CommercialIntelligenceValidationError(f"{field} must be numeric") from exc
+    if not math.isfinite(number) or number < 0:
+        raise CommercialIntelligenceValidationError(
+            f"{field} must be finite and non-negative"
+        )
+    return number
+
+
+def _positive_integer(value, field: str) -> int:
+    if isinstance(value, bool):
+        raise CommercialIntelligenceValidationError(f"{field} must be an integer")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise CommercialIntelligenceValidationError(f"{field} must be an integer") from exc
+    if not math.isfinite(number) or not number.is_integer():
+        raise CommercialIntelligenceValidationError(f"{field} must be an integer")
+    parsed = int(number)
+    if parsed < 1:
+        raise CommercialIntelligenceValidationError(f"{field} must be >= 1")
+    return parsed
+
+
+def _canonical_json(payload: dict) -> str:
+    try:
+        return json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise CommercialIntelligenceValidationError(
+            "payload must be canonical JSON serializable"
+        ) from exc
+
+
+def _sha256_id(payload: dict) -> str:
+    return "sha256:" + hashlib.sha256(
+        _canonical_json(payload).encode("utf-8")
+    ).hexdigest()
+
+
+def validate_inventory_bundle(bundle: dict) -> dict:
+    if not isinstance(bundle, dict) or bundle.get("contract") != EVIDENCE_CONTRACT:
+        raise CommercialIntelligenceValidationError(
+            f"expected contract {EVIDENCE_CONTRACT}"
+        )
+
+    payload = bundle.get("payload")
+    if not isinstance(payload, dict):
+        raise CommercialIntelligenceValidationError("payload is required")
+
+    bundle_id = bundle.get("bundleId")
+    if not isinstance(bundle_id, str) or not bundle_id.startswith("sha256:"):
+        raise CommercialIntelligenceValidationError(
+            "bundleId must be a sha256 digest"
+        )
+
+    integrity = bundle.get("integrity")
+    if not isinstance(integrity, dict):
+        raise CommercialIntelligenceValidationError("integrity is required")
+    if integrity.get("algorithm") != "SHA-256":
+        raise CommercialIntelligenceValidationError(
+            "integrity algorithm must be SHA-256"
+        )
+
+    canonical_payload = _canonical_json(payload)
+    expected_digest = "sha256:" + hashlib.sha256(
+        canonical_payload.encode("utf-8")
+    ).hexdigest()
+    if bundle_id != expected_digest or integrity.get("digest") != expected_digest:
+        raise CommercialIntelligenceValidationError("integrity digest mismatch")
+    if integrity.get("canonicalPayload") != canonical_payload:
+        raise CommercialIntelligenceValidationError(
+            "integrity canonical payload mismatch"
+        )
+
+    _parse_datetime(payload.get("observedAt"), "payload.observedAt")
+    snapshots = payload.get("snapshots")
+    if not isinstance(snapshots, list) or not snapshots:
+        raise CommercialIntelligenceValidationError(
+            "payload.snapshots must be a non-empty list"
+        )
+
+    seen = set()
+    for index, snapshot in enumerate(snapshots):
+        if not isinstance(snapshot, dict):
+            raise CommercialIntelligenceValidationError(
+                f"snapshot[{index}] must be an object"
+            )
+        missing = REQUIRED_SNAPSHOT_FIELDS - set(snapshot)
+        if missing:
+            raise CommercialIntelligenceValidationError(
+                f"snapshot[{index}] missing required fields: "
+                f"{', '.join(sorted(missing))}"
+            )
+
+        if not isinstance(snapshot["sku"], str):
+            raise CommercialIntelligenceValidationError(
+                f"snapshot[{index}].sku must be a string"
+            )
+        sku = snapshot["sku"].strip()
+        if not sku or sku in seen:
+            raise CommercialIntelligenceValidationError(
+                f"duplicate or blank snapshot sku: {sku}"
+            )
+        seen.add(sku)
+
+        for field in (
+            "available",
+            "avgDailyDemand",
+            "confirmedInbound",
+            "unitCost",
+            "campaignUpliftPct",
+        ):
+            _finite_non_negative(snapshot[field], f"snapshot[{sku}].{field}")
+
+        _positive_integer(snapshot["leadTimeDays"], f"snapshot[{sku}].leadTimeDays")
+        _parse_datetime(snapshot["observedAt"], f"snapshot[{sku}].observedAt")
+
+        evidence_refs = snapshot["evidenceRefs"]
+        if not isinstance(evidence_refs, list):
+            raise CommercialIntelligenceValidationError(
+                f"snapshot[{sku}].evidenceRefs must be a list"
+            )
+        if not all(isinstance(ref, str) for ref in evidence_refs):
+            raise CommercialIntelligenceValidationError(
+                f"snapshot[{sku}].evidenceRefs must contain strings"
+            )
+
+    return bundle
+
+
+def normalize_demand_signals(
+    rows: list[dict[str, str]],
+    *,
+    inventory_bundle: dict,
+) -> list[dict]:
+    validate_inventory_bundle(inventory_bundle)
+    evidence_time = _parse_datetime(
+        inventory_bundle["payload"]["observedAt"],
+        "payload.observedAt",
+    )
+    known_skus = {
+        item["sku"] for item in inventory_bundle["payload"]["snapshots"]
+    }
+
+    normalized = []
+    for index, row in enumerate(rows):
+        sku = (row.get("sku") or "").strip()
+        region = (row.get("region_id") or "").strip()
+        signal_type = (row.get("signal_type") or "").strip().upper()
+
+        if sku not in known_skus:
+            raise CommercialIntelligenceValidationError(f"unknown sku: {sku}")
+        if not region:
+            raise CommercialIntelligenceValidationError(
+                f"signal[{index}].region_id is required"
+            )
+        if signal_type not in ALLOWED_SIGNAL_TYPES:
+            raise CommercialIntelligenceValidationError(
+                f"unknown signal type: {signal_type}"
+            )
+
+        signal_value = _finite_non_negative(
+            row.get("signal_value"),
+            f"signal[{index}].signal_value",
+        )
+        signal_time = _parse_datetime(
+            row.get("observed_at"),
+            f"signal[{index}].observed_at",
+        )
+        if signal_time > evidence_time:
+            raise CommercialIntelligenceValidationError(
+                "signal observed_at is after evidence observation time"
+            )
+
+        normalized.append(
+            {
+                "sku": sku,
+                "regionId": region,
+                "signalType": signal_type,
+                "signalValue": signal_value,
+                "observedAt": signal_time.isoformat().replace("+00:00", "Z"),
+            }
+        )
+
+    return sorted(
+        normalized,
+        key=lambda item: (
+            item["regionId"],
+            item["sku"],
+            item["signalType"],
+            item["observedAt"],
+            item["signalValue"],
+        ),
+    )
+
+
+def _snapshot_by_sku(inventory_bundle: dict) -> dict[str, dict]:
+    return {
+        item["sku"]: item
+        for item in inventory_bundle["payload"]["snapshots"]
+    }
+
+
+def _days_cover_for_demand(snapshot: dict, daily_demand: float) -> float | None:
+    if daily_demand == 0:
+        return None
+    return (
+        float(snapshot["available"]) + float(snapshot["confirmedInbound"])
+    ) / daily_demand
+
+
+def _days_cover(snapshot: dict) -> float | None:
+    return _days_cover_for_demand(snapshot, float(snapshot["avgDailyDemand"]))
+
+
+def build_demand_matrix(
+    inventory_bundle: dict,
+    demand_signals: list[dict] | None = None,
+) -> list[dict]:
+    validate_inventory_bundle(inventory_bundle)
+    snapshots = _snapshot_by_sku(inventory_bundle)
+    raw_by_region_sku: dict[tuple[str, str], float] = {}
+    window = _positive_integer(
+        inventory_bundle["payload"].get("demandWindowDays"),
+        "payload.demandWindowDays",
+    )
+    regional_mode = bool(demand_signals)
+
+    if regional_mode:
+        for signal in demand_signals or []:
+            key = (signal["regionId"], signal["sku"])
+            raw_by_region_sku[key] = raw_by_region_sku.get(key, 0.0) + (
+                SIGNAL_WEIGHTS[signal["signalType"]] * float(signal["signalValue"])
+            )
+        regions = sorted({signal["regionId"] for signal in demand_signals or []})
+        for region in regions:
+            for sku in snapshots:
+                raw_by_region_sku.setdefault((region, sku), 0.0)
+    else:
+        for sku, snapshot in snapshots.items():
+            raw_by_region_sku[("UNSCOPED", sku)] = (
+                float(snapshot["avgDailyDemand"]) * window
+            )
+
+    clamped = {
+        key: max(0.0, value)
+        for key, value in raw_by_region_sku.items()
+    }
+    maxima: dict[str, float] = {}
+    for (region, _sku), value in clamped.items():
+        maxima[region] = max(maxima.get(region, 0.0), value)
+
+    rows = []
+    for (region, sku), raw in sorted(clamped.items()):
+        snapshot = snapshots[sku]
+        maximum = maxima[region]
+        baseline_demand = float(snapshot["avgDailyDemand"])
+        if regional_mode:
+            effective_demand = raw / window
+            demand_basis = "REGIONAL_SIGNAL_EQUIVALENT_DAILY_RATE"
+            stock_scope = "SHARED_AGGREGATE"
+        else:
+            effective_demand = baseline_demand
+            demand_basis = "BUNDLE_AVG_DAILY_DEMAND"
+            stock_scope = "AGGREGATE_UNSCOPED"
+
+        rows.append(
+            {
+                "sku": sku,
+                "regionId": region,
+                "rawIntent": raw,
+                "demandScore": (raw / maximum * 100.0) if maximum > 0 else 0.0,
+                "available": float(snapshot["available"]),
+                "confirmedInbound": float(snapshot["confirmedInbound"]),
+                "baselineAvgDailyDemand": baseline_demand,
+                "effectiveDailyDemand": effective_demand,
+                "demandBasis": demand_basis,
+                "stockScope": stock_scope,
+                "avgDailyDemand": effective_demand,
+                "leadTimeDays": int(snapshot["leadTimeDays"]),
+                "daysCover": _days_cover_for_demand(snapshot, effective_demand),
+                "evidenceRefs": sorted(set(snapshot["evidenceRefs"])),
+            }
+        )
+    return rows
+
+
+def route_ready_goods(
+    demand_matrix: list[dict],
+    *,
+    target_days_cover: int = 14,
+) -> list[dict]:
+    target_days_cover = _positive_integer(target_days_cover, "target_days_cover")
+
+    routes = []
+    for row in demand_matrix:
+        route = dict(row)
+        effective_demand = float(
+            row.get("effectiveDailyDemand", row.get("avgDailyDemand", 0.0))
+        )
+        total_stock = float(row["available"]) + float(row["confirmedInbound"])
+        if effective_demand > 0 and total_stock == 0:
+            route_class = "INVESTIGATE"
+            rule = "DEMAND_WITHOUT_READY_OR_INBOUND_STOCK"
+        elif (
+            effective_demand > 0
+            and row["daysCover"] is not None
+            and float(row["daysCover"]) < target_days_cover
+        ):
+            route_class = "REPLENISH"
+            if float(row["available"]) > 0:
+                rule = "LOW_DAYS_COVER_WITH_READY_GOODS"
+            else:
+                rule = "LOW_DAYS_COVER_WITH_INBOUND_ONLY"
+        else:
+            route_class = "HOLD"
+            rule = "SUFFICIENT_COVER_OR_NO_ACTIONABLE_DEMAND"
+
+        route["routeClass"] = route_class
+        route["routeRule"] = rule
+        routes.append(route)
+
+    return routes
+
+
+def build_replenishment_recommendations(
+    routes: list[dict],
+    *,
+    target_days_cover: int = 14,
+) -> list[dict]:
+    target_days_cover = _positive_integer(target_days_cover, "target_days_cover")
+    recommendations = []
+    for row in routes:
+        if row["routeClass"] != "REPLENISH":
+            continue
+
+        effective_demand = float(
+            row.get("effectiveDailyDemand", row.get("avgDailyDemand", 0.0))
+        )
+        demand_basis = row.get("demandBasis", "LEGACY_AVG_DAILY_DEMAND")
+        if demand_basis == "REGIONAL_SIGNAL_EQUIVALENT_DAILY_RATE":
+            quantity = None
+            quantity_state = "UNQUANTIFIED_SHARED_STOCK"
+        else:
+            target_stock = effective_demand * target_days_cover
+            quantity = max(
+                0.0,
+                target_stock
+                - float(row["available"])
+                - float(row["confirmedInbound"]),
+            )
+            quantity_state = "QUANTIFIED_AGGREGATE_STOCK"
+
+        recommendations.append(
+            {
+                "modelVersion": MODEL_VERSION,
+                "decisionClass": "REPLENISH",
+                "sku": row["sku"],
+                "regionId": row["regionId"],
+                "recommendedQty": quantity,
+                "quantityState": quantity_state,
+                "targetDaysCover": target_days_cover,
+                "reason": {
+                    "rule": row["routeRule"],
+                    "daysCover": row["daysCover"],
+                    "demandScore": row["demandScore"],
+                    "demandBasis": demand_basis,
+                    "effectiveDailyDemand": effective_demand,
+                },
+                "authorityState": "RECOMMENDED_ONLY",
+                "evidenceRefs": sorted(set(row["evidenceRefs"])),
+            }
+        )
+
+    return sorted(
+        recommendations,
+        key=lambda item: (item["regionId"], item["sku"]),
+    )
+
+
+def detect_assortment_risks(
+    inventory_bundle: dict,
+    *,
+    slow_stock_days: int = 45,
+) -> tuple[list[dict], dict]:
+    validate_inventory_bundle(inventory_bundle)
+    slow_stock_days = _positive_integer(slow_stock_days, "slow_stock_days")
+
+    snapshots = inventory_bundle["payload"]["snapshots"]
+    risks = []
+
+    for snapshot in snapshots:
+        available = float(snapshot["available"])
+        demand = float(snapshot["avgDailyDemand"])
+        cover = _days_cover(snapshot)
+        if available > 0 and (
+            demand == 0
+            or (cover is not None and cover > slow_stock_days)
+        ):
+            risks.append(
+                {
+                    "riskType": "SLOW_STOCK",
+                    "sku": snapshot["sku"],
+                    "daysCover": cover,
+                    "available": available,
+                    "evidenceRefs": sorted(set(snapshot["evidenceRefs"])),
+                }
+            )
+
+    lineage_ready = all(
+        "styleId" in item and "size" in item
+        for item in snapshots
+    )
+    capability = {
+        "brokenSizeDetection": (
+            "AVAILABLE"
+            if lineage_ready
+            else "INSUFFICIENT_STYLE_SIZE_EVIDENCE"
+        )
+    }
+
+    if lineage_ready:
+        by_style: dict[str, list[dict]] = {}
+        for snapshot in snapshots:
+            by_style.setdefault(str(snapshot["styleId"]), []).append(snapshot)
+
+        for style_id, items in sorted(by_style.items()):
+            present = sorted(
+                str(item["size"])
+                for item in items
+                if float(item["available"]) > 0
+            )
+            missing = sorted(
+                str(item["size"])
+                for item in items
+                if float(item["available"]) == 0
+            )
+            if present and missing:
+                evidence_refs = sorted(
+                    {
+                        ref
+                        for item in items
+                        for ref in item["evidenceRefs"]
+                    }
+                )
+                risks.append(
+                    {
+                        "riskType": "BROKEN_SIZE",
+                        "styleId": style_id,
+                        "presentSizes": present,
+                        "missingSizes": missing,
+                        "evidenceRefs": evidence_refs,
+                    }
+                )
+
+    risks.sort(
+        key=lambda item: (
+            item["riskType"],
+            item.get("styleId", ""),
+            item.get("sku", ""),
+        )
+    )
+    return risks, capability
+
+
+def build_recommendation_ledger(
+    inventory_bundle: dict,
+    recommendations: list[dict],
+    risks: list[dict],
+    capability_state: dict,
+    *,
+    model_version: str = MODEL_VERSION,
+) -> dict:
+    validate_inventory_bundle(inventory_bundle)
+    source_bundle_id = inventory_bundle["bundleId"]
+
+    with_ids = []
+    for recommendation in recommendations:
+        if not isinstance(recommendation, dict):
+            raise CommercialIntelligenceValidationError(
+                "recommendations must contain objects"
+            )
+        clean_recommendation = {
+            key: value
+            for key, value in recommendation.items()
+            if key != "recommendationId"
+        }
+        business_payload = {
+            "modelVersion": model_version,
+            "sourceBundleId": source_bundle_id,
+            "recommendation": clean_recommendation,
+        }
+        computed_id = _sha256_id(business_payload)
+        with_ids.append(
+            {
+                **clean_recommendation,
+                "recommendationId": computed_id,
+            }
+        )
+
+    canonical = {
+        "schemaVersion": "1.0.0",
+        "contract": "VOI-COMMERCIAL-INTELLIGENCE-001",
+        "modelVersion": model_version,
+        "sourceBundleId": source_bundle_id,
+        "evidenceObservedAt": inventory_bundle["payload"]["observedAt"],
+        "recommendations": sorted(
+            with_ids,
+            key=lambda item: item["recommendationId"],
+        ),
+        "risks": sorted(risks, key=lambda item: _canonical_json(item)),
+        "capabilityState": dict(sorted(capability_state.items())),
+    }
+    ledger_id = _sha256_id(canonical)
+    return {
+        **canonical,
+        "integrity": {
+            "algorithm": "SHA-256",
+            "digest": ledger_id,
+        },
+        "ledgerId": ledger_id,
+    }
