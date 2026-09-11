@@ -35,6 +35,7 @@ jobs:
       - name: Compile bridge modules
         run: |
           uv run python -m py_compile \
+            evidence_core.py \
             voi_evidence_adapter.py \
             export_voi_inventory_evidence.py \
             inventory_evidence_bridge.py \
