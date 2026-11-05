@@ -1,0 +1,109 @@
+name: Matter Issue
+description: Open a governed issue inside MAT-VJRIPL-001
+title: "[MAT-VJRIPL-001] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repository is governed as Matter `MAT-VJRIPL-001`. Use this form for defects, questions, decisions, obligations, risks, claims, evidence gaps, or work items requiring disposition.
+
+  - type: input
+    id: matter_id
+    attributes:
+      label: Matter ID
+      description: Canonical Matter identifier.
+      value: MAT-VJRIPL-001
+    validations:
+      required: true
+
+  - type: dropdown
+    id: issue_class
+    attributes:
+      label: Issue class
+      options:
+        - DEFECT
+        - QUESTION
+        - DECISION
+        - OBLIGATION
+        - RISK
+        - CLAIM
+        - EVIDENCE_GAP
+        - FEATURE_OR_CAPABILITY
+        - MAINTENANCE
+        - GOVERNANCE
+        - OTHER
+    validations:
+      required: true
+
+  - type: input
+    id: beneficiary
+    attributes:
+      label: Intended beneficiary
+      description: State who receives the attributable benefit of resolving this Issue.
+      placeholder: VJRIPL / VOI Jeans
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Question, problem, obligation, risk, or decision
+      description: Define exactly what needs disposition. Keep unrelated Matters out of this Issue.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and source references
+      description: Link the narrowest durable evidence available, or state what evidence is missing.
+      placeholder: Commits, files, receipts, exports, tests, contracts, provider records, or public-source references.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ip_class
+    attributes:
+      label: Primary IP / provenance class
+      description: Choose the best current classification. Mixed classes can be explained below.
+      options:
+        - VOI_FOREGROUND
+        - VOI_DATA_KNOWLEDGE
+        - SYNNERGYZE_BACKGROUND
+        - THIRD_PARTY_PROTOTYPE
+        - UNCLASSIFIED_LEGACY
+        - MIXED
+    validations:
+      required: true
+
+  - type: textarea
+    id: ip_notes
+    attributes:
+      label: IP / provenance notes
+      description: Explain mixed classifications, uncertain provenance, or why the selected class applies.
+
+  - type: textarea
+    id: cross_matter
+    attributes:
+      label: Cross-Matter dependency or import
+      description: State `none` if there is no dependency/import. Otherwise identify source Matter, source object/commit, rights basis, purpose, and authority.
+      value: none
+    validations:
+      required: true
+
+  - type: textarea
+    id: authority
+    attributes:
+      label: Authority boundary
+      description: State what authority exists and what remains separately required before any external or production effect.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance / closure criteria
+      description: Define what evidence or disposition is sufficient to resolve and close this Issue.
+    validations:
+      required: true
