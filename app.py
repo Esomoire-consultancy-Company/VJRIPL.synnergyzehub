@@ -10,6 +10,7 @@ from order_confirmation import show_order_confirmation
 from merchandiser_agent import show_merchandiser_agent
 from retailer_analysis import show_retailer_analysis
 from inventory_evidence_bridge import show_inventory_evidence_bridge
+from commercial_intelligence_bridge import show_commercial_intelligence_bridge
 
 # Configure the page
 st.set_page_config(
@@ -70,6 +71,11 @@ with st.sidebar:
             st.session_state.page = 'inventory_evidence_bridge'
 
         st.caption("Normalize read-only ERP/OMS exports into integrity-protected evidence for the Warden runtime.")
+
+        if st.button("🧠 Commercial Intelligence", use_container_width=True):
+            st.session_state.page = 'commercial_intelligence'
+
+        st.caption("Convert validated evidence into advisory demand and replenishment recommendations.")
         
         # Add access to the merchandiser agent
         st.markdown("### Your Support Team")
@@ -133,6 +139,8 @@ elif st.session_state.page == 'retailer_analysis':
     show_retailer_analysis()
 elif st.session_state.page == 'inventory_evidence_bridge':
     show_inventory_evidence_bridge()
+elif st.session_state.page == 'commercial_intelligence':
+    show_commercial_intelligence_bridge()
 
 # Footer
 st.markdown("---")

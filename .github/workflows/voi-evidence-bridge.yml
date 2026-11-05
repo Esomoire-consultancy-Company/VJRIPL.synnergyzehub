@@ -32,16 +32,20 @@ jobs:
       - name: Install all locked project packages
         run: uv sync --locked
 
-      - name: Compile bridge modules
+      - name: Compile governed VOI modules
         run: |
           uv run python -m py_compile \
             voi_evidence_adapter.py \
             export_voi_inventory_evidence.py \
             inventory_evidence_bridge.py \
+            voi_commercial_intelligence.py \
+            commercial_intelligence_bridge.py \
             app.py
 
       - name: Run evidence contract regression suite
         run: uv run python -m unittest discover -s tests -p 'test_*.py' -v
 
-      - name: Prove direct test entrypoint
-        run: uv run python tests/test_voi_evidence_adapter.py
+      - name: Prove direct governed test entrypoints
+        run: |
+          uv run python tests/test_voi_evidence_adapter.py
+          uv run python tests/test_voi_commercial_intelligence.py
